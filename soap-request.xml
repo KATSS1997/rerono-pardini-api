@@ -1,0 +1,19 @@
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"
+                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                  xmlns:sch="http://hermespardini.com.br/b2b/apoio/schemas">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <sch:getResultadoPedido soapenv:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">
+      <login xsi:type="xsd:string">12000</login>
+      <passwd xsi:type="xsd:string">5969</passwd>
+      <anoCodPedApoio xsi:type="xsd:long">2026</anoCodPedApoio>
+      <CodPedApoio xsi:type="xsd:string">1419652</CodPedApoio>
+      <CodExmApoio xsi:type="xsd:string"></CodExmApoio>
+      <PDF xsi:type="xsd:long">0</PDF>
+      <versaoResultado xsi:type="xsd:long">1</versaoResultado>
+      <papelTimbrado xsi:type="xsd:boolean">false</papelTimbrado>
+      <valorReferencia xsi:type="xsd:long">0</valorReferencia>
+    </sch:getResultadoPedido>
+  </soapenv:Body>
+</soapenv:Envelope>
