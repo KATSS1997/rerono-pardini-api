@@ -1,60 +1,20 @@
 package br.com.rerono.model;
 
-import java.time.LocalDateTime;
-
-public class Pedido {
+public class ResultadoPardini {
     
-    private Long idPedido;
-    private Integer anoCodPedApoio;
     private String codPedApoio;
-    private Long cdAtendimento;
-    private Long cdPaciente;
-    private StatusPedido status;
-    private Integer tentativas;
-    private LocalDateTime dtCriacao;
-    private LocalDateTime dtProcessamento;
-    private Long cdArquivoPdf;
-    private Long cdArquivoGrafico;
+    private Integer anoCodPedApoio;
+    private byte[] pdfBytes;
+    private byte[] graficoBytes;
     private String hashPdf;
     private String hashGrafico;
-    private String erroMsg;
+    private String xmlOriginal;
+    private boolean sucesso;
+    private String mensagemErro;
+    private String codigoRetorno;
     
-    public enum StatusPedido {
-        PENDENTE,
-        PROCESSANDO,
-        PROCESSADO,
-        ERRO,
-        IGNORADO
-    }
-    
-    public Pedido() {
-        this.status = StatusPedido.PENDENTE;
-        this.tentativas = 0;
-        this.dtCriacao = LocalDateTime.now();
-    }
-    
-    public Pedido(Integer anoCodPedApoio, String codPedApoio, Long cdAtendimento, Long cdPaciente) {
-        this();
-        this.anoCodPedApoio = anoCodPedApoio;
-        this.codPedApoio = codPedApoio;
-        this.cdAtendimento = cdAtendimento;
-        this.cdPaciente = cdPaciente;
-    }
-    
-    public Long getIdPedido() {
-        return idPedido;
-    }
-    
-    public void setIdPedido(Long idPedido) {
-        this.idPedido = idPedido;
-    }
-    
-    public Integer getAnoCodPedApoio() {
-        return anoCodPedApoio;
-    }
-    
-    public void setAnoCodPedApoio(Integer anoCodPedApoio) {
-        this.anoCodPedApoio = anoCodPedApoio;
+    public ResultadoPardini() {
+        this.sucesso = false;
     }
     
     public String getCodPedApoio() {
@@ -65,72 +25,28 @@ public class Pedido {
         this.codPedApoio = codPedApoio;
     }
     
-    public Long getCdAtendimento() {
-        return cdAtendimento;
+    public Integer getAnoCodPedApoio() {
+        return anoCodPedApoio;
     }
     
-    public void setCdAtendimento(Long cdAtendimento) {
-        this.cdAtendimento = cdAtendimento;
+    public void setAnoCodPedApoio(Integer anoCodPedApoio) {
+        this.anoCodPedApoio = anoCodPedApoio;
     }
     
-    public Long getCdPaciente() {
-        return cdPaciente;
+    public byte[] getPdfBytes() {
+        return pdfBytes;
     }
     
-    public void setCdPaciente(Long cdPaciente) {
-        this.cdPaciente = cdPaciente;
+    public void setPdfBytes(byte[] pdfBytes) {
+        this.pdfBytes = pdfBytes;
     }
     
-    public StatusPedido getStatus() {
-        return status;
+    public byte[] getGraficoBytes() {
+        return graficoBytes;
     }
     
-    public void setStatus(StatusPedido status) {
-        this.status = status;
-    }
-    
-    public Integer getTentativas() {
-        return tentativas;
-    }
-    
-    public void setTentativas(Integer tentativas) {
-        this.tentativas = tentativas;
-    }
-    
-    public void incrementarTentativas() {
-        this.tentativas++;
-    }
-    
-    public LocalDateTime getDtCriacao() {
-        return dtCriacao;
-    }
-    
-    public void setDtCriacao(LocalDateTime dtCriacao) {
-        this.dtCriacao = dtCriacao;
-    }
-    
-    public LocalDateTime getDtProcessamento() {
-        return dtProcessamento;
-    }
-    
-    public void setDtProcessamento(LocalDateTime dtProcessamento) {
-        this.dtProcessamento = dtProcessamento;
-    }
-    
-    public Long getCdArquivoPdf() {
-        return cdArquivoPdf;
-    }
-    
-    public void setCdArquivoPdf(Long cdArquivoPdf) {
-        this.cdArquivoPdf = cdArquivoPdf;
-    }
-    
-    public Long getCdArquivoGrafico() {
-        return cdArquivoGrafico;
-    }
-    
-    public void setCdArquivoGrafico(Long cdArquivoGrafico) {
-        this.cdArquivoGrafico = cdArquivoGrafico;
+    public void setGraficoBytes(byte[] graficoBytes) {
+        this.graficoBytes = graficoBytes;
     }
     
     public String getHashPdf() {
@@ -149,21 +65,51 @@ public class Pedido {
         this.hashGrafico = hashGrafico;
     }
     
-    public String getErroMsg() {
-        return erroMsg;
+    public String getXmlOriginal() {
+        return xmlOriginal;
     }
     
-    public void setErroMsg(String erroMsg) {
-        this.erroMsg = erroMsg;
+    public void setXmlOriginal(String xmlOriginal) {
+        this.xmlOriginal = xmlOriginal;
     }
     
-    public String getChavePardini() {
-        return anoCodPedApoio + "-" + codPedApoio;
+    public boolean isSucesso() {
+        return sucesso;
     }
     
-    @Override
-    public String toString() {
-        return String.format("Pedido[id=%d, pardini=%s, atend=%d, status=%s, tentativas=%d]",
-            idPedido, getChavePardini(), cdAtendimento, status, tentativas);
+    public void setSucesso(boolean sucesso) {
+        this.sucesso = sucesso;
+    }
+    
+    public String getMensagemErro() {
+        return mensagemErro;
+    }
+    
+    public void setMensagemErro(String mensagemErro) {
+        this.mensagemErro = mensagemErro;
+    }
+    
+    public String getCodigoRetorno() {
+        return codigoRetorno;
+    }
+    
+    public void setCodigoRetorno(String codigoRetorno) {
+        this.codigoRetorno = codigoRetorno;
+    }
+    
+    public boolean temPdf() {
+        return pdfBytes != null && pdfBytes.length > 0;
+    }
+    
+    public boolean temGrafico() {
+        return graficoBytes != null && graficoBytes.length > 0;
+    }
+    
+    public int getTamanhoPdf() {
+        return pdfBytes != null ? pdfBytes.length : 0;
+    }
+    
+    public int getTamanhoGrafico() {
+        return graficoBytes != null ? graficoBytes.length : 0;
     }
 }

@@ -57,7 +57,6 @@ public class AppConfig {
         }
     }
     
-    // PARDINI SOAP
     public String getPardiniEndpoint() {
         return properties.getProperty("pardini.soap.endpoint");
     }
@@ -78,7 +77,6 @@ public class AppConfig {
         return Integer.parseInt(properties.getProperty("pardini.soap.timeout.read", "60000"));
     }
     
-    // ORACLE DATABASE
     public String getOracleUrl() {
         return properties.getProperty("oracle.jdbc.url");
     }
@@ -95,7 +93,6 @@ public class AppConfig {
         return properties.getProperty("oracle.jdbc.driver", "oracle.jdbc.OracleDriver");
     }
     
-    // HIKARICP
     public int getHikariPoolSize() {
         return Integer.parseInt(properties.getProperty("hikari.pool.size", "10"));
     }
@@ -112,7 +109,6 @@ public class AppConfig {
         return Long.parseLong(properties.getProperty("hikari.pool.connection-timeout", "30000"));
     }
     
-    // MV2000
     public int getMv2000TipoDocumentoLaudo() {
         return Integer.parseInt(properties.getProperty("mv2000.tipo.documento.laudo", "841"));
     }
@@ -129,7 +125,6 @@ public class AppConfig {
         return properties.getProperty("mv2000.origem.documento", "HERMES PARDINI - HPWS");
     }
     
-    // WORKER/SCHEDULER
     public int getSchedulerIntervalMinutes() {
         return Integer.parseInt(properties.getProperty("scheduler.interval.minutes", "5"));
     }
