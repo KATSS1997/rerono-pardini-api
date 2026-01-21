@@ -1,0 +1,153 @@
+Web Service HPWS.XMLServer
+Gráfico de eletroforese/ Laudo PDF:
+Para elucidação de como fazer o processo de decodificação (decoder), segue abaixo um exemplo implementado na linguagem JAVA.
+
+É importante salientar que o processo aqui descrito é o mesmo para o Gráfico de eletroforese e para o Laudo em PDF, sendo somente distintos pelo formato da extensão dos arquivos.
+
+
+Decodificação:
+
+O primeiro passo é "capturar" os dados da tag Grafico, que contém o gráfico de eletroforese, ou da tag PDF, que contém o laudo.
+
+No código abaixo, obtemos o documento (XML de retorno) do qual iremos extrair os binários.
+
+Após obtermos o documento, capturamos o conteúdo da tag Grafico, ou PDF, e o armazenamos na String loStrImageBinary.
+
+final DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+String loStrImageBinary = "";
+try {
+    // Using factory get an instance of document builder
+    final DocumentBuilder db = dbf.newDocumentBuilder();
+    // parse using builder to get DOM representation of the XML file
+    final Document dom = db.parse(loCompleteFilePath);
+    final Element docEle = dom.getDocumentElement();
+    loStrImageBinary = getChildTagValue(docEle, "Grafico");
+    } catch (final ParserConfigurationException pce) {
+    	pce.printStackTrace();
+    } catch (final SAXException se) {
+    	se.printStackTrace();
+    } catch (final IOException ioe) {
+    	ioe.printStackTrace();
+    }
+Obs: Neste exemplo fizemos a decodificação do Gráfico de eletroforese, mas você pode usar o mesmo processo para gerar o Laudo em PDF
+
+
+Depois de obtermos os binários, é feita a conversão do gráfico para imagem em formato PNG, ou do laudo, em PDF.
+
+Neste processo usamos o método getBytes(), que nos retorna o conteúdo da string transformado em bytes. Esse valor é transformado em um ByteArray, que por sua vez é armazenado em um InputStream, que posteriormente é convertido.
+
+Após obter a imagem (Gráfico de eletroforese), é criado um arquivo com formato "png". A variável fullpath é uma String que contém o local físico onde será gerado o arquivo.
+
+// convert byte array back to BufferedImage
+final InputStream in = new ByteArrayInputStream(loStrImageBinary.getBytes());
+final BufferedImage bImageFromConvert = ImageIO.read(in);
+ImageIO.write(bImageFromConvert, "png", new File(fullpath + "nova-imagem.png"));
+Obs: Em Java, contamos com a Classe FileUtils que provê o método writeByteArrayToFile que é capaz de receber um ByteArray diretamente para que possamos gerar o PDF.
+
+
+Classe GraficoEletroforese:
+Esta classe é responsável por implementar os métodos de codificação (encoder) e decodificação (decoder) do gráfico de eletroforese.
+
+
+package br.com.hpardini.eletroforese;
+ 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+ 
+import javax.imageio.ImageIO;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+ 
+import org.jfree.chart.JFreeChart;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
+ 
+ 
+import com.sun.org.apache.xerces.internal.impl.dv.util.Base64;
+ 
+/**
+ * @author Rogério Alcântara Valente.
+ * @param 
+ * @since 20/06/2011
+ */
+public class GraficoEletroforese {
+	/**
+	 * Converte os binários do XML de retorno para um arquivo de imagem.
+	 * @param loCompleteFilePath - local onde se encontra o arquivo XML.
+	 * @param fullpath - local onde será salvo o arquivo de imagem.
+	 */
+	public void coverterParaImagem(String loCompleteFilePath, String fullpath) {
+		final DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+		String loStrImageBinary = "";
+		try {
+			// Using factory get an instance of document builder
+			final DocumentBuilder db = dbf.newDocumentBuilder();
+			// parse using builder to get DOM representation of the XML file
+			final Document dom = db.parse(loCompleteFilePath);
+			final Element docEle = dom.getDocumentElement();
+			loStrImageBinary = getChildTagValue(docEle, "Grafico");
+		} catch (final ParserConfigurationException pce) {
+			pce.printStackTrace();
+		} catch (final SAXException se) {
+			se.printStackTrace();
+		} catch (final IOException ioe) {
+			ioe.printStackTrace();
+		}
+		// convert byte array back to BufferedImage
+		final InputStream in = new ByteArrayInputStream(loStrImageBinary.getBytes());
+		BufferedImage bImageFromConvert;
+		
+		try {
+			
+			bImageFromConvert = ImageIO.read(in);
+			ImageIO.write(bImageFromConvert, "png", new File(fullpath + "nova-imagem.png"));
+			
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+	}
+	/**
+	 * Converte o gráfico de eletroforese em imagem e posteriormente em binário.
+	 * @param grafico - Objeto do tipo JFreeChart
+	 * @return String
+	 */
+	public String converterParaBase64(JFreeChart grafico) {
+		String encodedImage = "";
+		try {
+			final BufferedImage image = grafico.createBufferedImage(640, 480);
+			final ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			ImageIO.write(image, "png", baos);
+			encodedImage = Base64.encode(baos.toByteArray());
+			//String contendo os binários que irão povoar a tag Grafico do XML de retorno.
+			return encodedImage;
+		} catch (final Exception e) {
+			System.err.println(e.toString());
+		}
+		return encodedImage;
+	}
+	private String getChildTagValue(final Element pTagRegResult, final String pTagName) {
+		final NodeList children = pTagRegResult.getElementsByTagName(pTagName);
+		if (children == null) {
+			return null;
+		}
+		final Element child = (Element) children.item(0);
+		if (child == null) {
+			return null;
+		}
+		String retorno = "";
+		try {
+			retorno = child.getFirstChild().getNodeValue();
+		} catch (final Exception e) {
+			retorno = null;
+		}
+		return retorno;
+	}
+}
