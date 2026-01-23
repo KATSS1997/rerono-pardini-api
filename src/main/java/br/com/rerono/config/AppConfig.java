@@ -1,5 +1,6 @@
 package br.com.rerono.config;
 
+import io.github.cdimascio.dotenv.Dotenv;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,8 +17,17 @@ public class AppConfig {
 
     private AppConfig() {
         this.properties = new Properties();
+
+        // 1) Carrega application.properties (defaults)
         loadProperties();
+
+        // 2) Aplica overrides do .env (se existir) e depois do ambiente do SO
+        // Ordem final de prioridade:
+        // ENV do SO > .env > application.properties
+        loadDotenvOverrides();
         loadEnvironmentOverrides();
+
+        logger.info("Configurações finais carregadas (properties + .env + env do SO)");
     }
 
     public static synchronized AppConfig getInstance() {
@@ -40,30 +50,47 @@ public class AppConfig {
         }
     }
 
-    private void loadEnvironmentOverrides() {
-        // Pardini
-        String pardiniEndpoint = System.getenv("PARDINI_ENDPOINT");
-        if (pardiniEndpoint != null && !pardiniEndpoint.isEmpty()) {
-            properties.setProperty("pardini.soap.endpoint", pardiniEndpoint);
-        }
+    private void loadDotenvOverrides() {
+        try {
+            Dotenv dotenv = Dotenv.configure()
+                    .ignoreIfMissing()
+                    .load();
 
-        String pardiniPasswd = System.getenv("PARDINI_PASSWD");
-        if (pardiniPasswd != null && !pardiniPasswd.isEmpty()) {
-            properties.setProperty("pardini.soap.passwd", pardiniPasswd);
-        }
+            // Pardini
+            setIfPresent(dotenv.get("PARDINI_ENDPOINT"), "pardini.soap.endpoint");
+            setIfPresent(dotenv.get("PARDINI_LOGIN"), "pardini.soap.login");
+            setIfPresent(dotenv.get("PARDINI_PASSWD"), "pardini.soap.passwd");
 
-        // Oracle
-        String oraclePasswd = System.getenv("ORACLE_PASSWD");
-        if (oraclePasswd != null && !oraclePasswd.isEmpty()) {
-            properties.setProperty("oracle.jdbc.password", oraclePasswd);
-        }
+            // Oracle
+            setIfPresent(dotenv.get("ORACLE_URL"), "oracle.jdbc.url");
+            setIfPresent(dotenv.get("ORACLE_USERNAME"), "oracle.jdbc.username");
+            setIfPresent(dotenv.get("ORACLE_PASSWD"), "oracle.jdbc.password");
 
-        String oracleUrl = System.getenv("ORACLE_URL");
-        if (oracleUrl != null && !oracleUrl.isEmpty()) {
-            properties.setProperty("oracle.jdbc.url", oracleUrl);
+        } catch (Exception e) {
+            // Se der erro, não derruba a aplicação (só loga)
+            logger.warn("Falha ao carregar .env: {}", e.getMessage());
         }
     }
 
+    private void loadEnvironmentOverrides() {
+        // Pardini
+        setIfPresent(System.getenv("PARDINI_ENDPOINT"), "pardini.soap.endpoint");
+        setIfPresent(System.getenv("PARDINI_LOGIN"), "pardini.soap.login");
+        setIfPresent(System.getenv("PARDINI_PASSWD"), "pardini.soap.passwd");
+
+        // Oracle
+        setIfPresent(System.getenv("ORACLE_URL"), "oracle.jdbc.url");
+        setIfPresent(System.getenv("ORACLE_USERNAME"), "oracle.jdbc.username");
+        setIfPresent(System.getenv("ORACLE_PASSWD"), "oracle.jdbc.password");
+    }
+
+    private void setIfPresent(String value, String propertyKey) {
+        if (value != null && !value.trim().isEmpty()) {
+            properties.setProperty(propertyKey, value.trim());
+        }
+    }
+
+    // ===== PARDINI =====
     public String getPardiniEndpoint() {
         return properties.getProperty("pardini.soap.endpoint");
     }
@@ -91,6 +118,7 @@ public class AppConfig {
         return Integer.parseInt(properties.getProperty("pardini.soap.timeout.read", "60000"));
     }
 
+    // ===== ORACLE =====
     public String getOracleUrl() {
         return properties.getProperty("oracle.jdbc.url");
     }
@@ -107,6 +135,7 @@ public class AppConfig {
         return properties.getProperty("oracle.jdbc.driver", "oracle.jdbc.OracleDriver");
     }
 
+    // ===== HIKARI =====
     public int getHikariPoolSize() {
         return Integer.parseInt(properties.getProperty("hikari.pool.size", "10"));
     }
@@ -123,6 +152,7 @@ public class AppConfig {
         return Long.parseLong(properties.getProperty("hikari.pool.connection-timeout", "30000"));
     }
 
+    // ===== MV2000 =====
     public int getMv2000TipoDocumentoLaudo() {
         return Integer.parseInt(properties.getProperty("mv2000.tipo.documento.laudo", "841"));
     }
@@ -139,6 +169,7 @@ public class AppConfig {
         return properties.getProperty("mv2000.origem.documento", "HERMES PARDINI - HPWS");
     }
 
+    // ===== WORKER/SCHEDULER =====
     public int getSchedulerIntervalMinutes() {
         return Integer.parseInt(properties.getProperty("scheduler.interval.minutes", "5"));
     }
@@ -155,6 +186,7 @@ public class AppConfig {
         return Integer.parseInt(properties.getProperty("worker.batch.size", "50"));
     }
 
+    // ===== GET GENÉRICO =====
     public String getProperty(String key) {
         return properties.getProperty(key);
     }

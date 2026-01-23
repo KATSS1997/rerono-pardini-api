@@ -42,13 +42,35 @@ public class HpwsClient {
                 "http://hermespardini.com.br/b2b/apoio/schemas/HPWS.XMLServer.getResultadoPedido";
     }
 
+    /**
+     * Consulta resultado de pedido no Hermes Pardini.
+     * 
+     * @param anoCodPedApoio Ano do código do pedido
+     * @param codPedApoio    Código do pedido (String)
+     * @param incluirPdf     0 = sem PDF, 1 = com PDF
+     * @return ResultadoPardini com os dados do pedido
+     */
     public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, int incluirPdf) {
+        return getResultadoPedido(anoCodPedApoio, codPedApoio, "", incluirPdf);
+    }
+
+    /**
+     * Consulta resultado de pedido no Hermes Pardini com código de exame específico.
+     * 
+     * @param anoCodPedApoio Ano do código do pedido
+     * @param codPedApoio    Código do pedido (String)
+     * @param codExmApoio    Código do exame específico (opcional, pode ser vazio)
+     * @param incluirPdf     0 = sem PDF, 1 = com PDF
+     * @return ResultadoPardini com os dados do pedido
+     */
+    public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, 
+                                                String codExmApoio, int incluirPdf) {
         ResultadoPardini resultado = new ResultadoPardini();
         resultado.setAnoCodPedApoio(anoCodPedApoio);
         resultado.setCodPedApoio(codPedApoio);
 
         try {
-            String soapRequest = buildSoapRequest(anoCodPedApoio, codPedApoio, incluirPdf);
+            String soapRequest = buildSoapRequest(anoCodPedApoio, codPedApoio, codExmApoio, incluirPdf);
             logger.debug("Request SOAP para pedido {}-{}", anoCodPedApoio, codPedApoio);
 
             String soapResponse = sendSoapRequest(soapRequest);
@@ -73,8 +95,8 @@ public class HpwsClient {
         return resultado;
     }
 
-    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio, int incluirPdf) {
-        // OBS: o WSDL que você colou inclui UnidadeNoValor (boolean). Vamos mandar false.
+    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio, 
+                                     String codExmApoio, int incluirPdf) {
         boolean unidadeNoValor = false;
 
         StringBuilder sb = new StringBuilder();
@@ -91,7 +113,7 @@ public class HpwsClient {
         sb.append("      <passwd xsi:type=\"xsd:string\">").append(escapeXml(passwd)).append("</passwd>\n");
         sb.append("      <anoCodPedApoio xsi:type=\"xsd:long\">").append(anoCodPedApoio).append("</anoCodPedApoio>\n");
         sb.append("      <CodPedApoio xsi:type=\"xsd:string\">").append(escapeXml(codPedApoio)).append("</CodPedApoio>\n");
-        sb.append("      <CodExmApoio xsi:type=\"xsd:string\"></CodExmApoio>\n");
+        sb.append("      <CodExmApoio xsi:type=\"xsd:string\">").append(escapeXml(codExmApoio != null ? codExmApoio : "")).append("</CodExmApoio>\n");
         sb.append("      <PDF xsi:type=\"xsd:long\">").append(incluirPdf).append("</PDF>\n");
         sb.append("      <versaoResultado xsi:type=\"xsd:long\">1</versaoResultado>\n");
         sb.append("      <papelTimbrado xsi:type=\"xsd:boolean\">false</papelTimbrado>\n");
@@ -116,7 +138,6 @@ public class HpwsClient {
             connection.setReadTimeout(readTimeout);
 
             connection.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
-            // SOAPAction correta (WSDL)
             connection.setRequestProperty("SOAPAction", soapActionGetResultadoPedido);
 
             try (OutputStream os = connection.getOutputStream()) {
@@ -154,6 +175,20 @@ public class HpwsClient {
 
     private void parseResponse(String xmlResponse, ResultadoPardini resultado) {
         try {
+            // Verificar se é um SOAP Fault
+            if (xmlResponse.contains("<SOAP-ENV:Fault>") || xmlResponse.contains("<soap:Fault>")) {
+                String faultString = extractTagContent(xmlResponse, "faultstring");
+                String detail = extractTagContent(xmlResponse, "info");
+                String errorMsg = faultString != null ? faultString : "SOAP Fault";
+                if (detail != null) {
+                    errorMsg += ": " + detail;
+                }
+                resultado.setSucesso(false);
+                resultado.setMensagemErro(errorMsg);
+                logger.warn("SOAP Fault recebido: {}", errorMsg);
+                return;
+            }
+
             String pdfBase64 = extractTagContent(xmlResponse, "PDF");
             if (pdfBase64 != null && !pdfBase64.isEmpty()) {
                 byte[] pdfBytes = Base64Handler.decode(pdfBase64);
@@ -184,7 +219,7 @@ public class HpwsClient {
                 resultado.setMensagemErro(mensagemErro);
             }
 
-            resultado.setSucesso(resultado.temPdf() ||
+            resultado.setSucesso(resultado.temPdf() || resultado.temGrafico() ||
                     (mensagemErro == null || mensagemErro.isEmpty()));
 
         } catch (Exception e) {
@@ -230,7 +265,6 @@ public class HpwsClient {
     }
 
     public boolean testarConexao() {
-        // Melhor teste: baixar WSDL
         String wsdlUrl = endpoint.contains("?") ? (endpoint + "&WSDL") : (endpoint + "?WSDL");
 
         try {
@@ -243,7 +277,6 @@ public class HpwsClient {
             int code = connection.getResponseCode();
             connection.disconnect();
 
-            // 200 OK = acessível
             return code >= 200 && code < 300;
         } catch (Exception e) {
             logger.error("Falha ao testar conexão com Pardini (WSDL): {}", e.getMessage());
