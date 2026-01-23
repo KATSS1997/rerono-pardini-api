@@ -10,10 +10,17 @@ import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
 
 public class HpwsClient {
 
     private static final Logger logger = LoggerFactory.getLogger(HpwsClient.class);
+    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
 
     private final String endpoint;
     private final String login;
@@ -21,6 +28,15 @@ public class HpwsClient {
     private final int connectTimeout;
     private final int readTimeout;
     private final String soapActionGetResultadoPedido;
+
+    /**
+     * Diretório onde vamos salvar artefatos de teste (XML/PDF/PNG).
+     * Pode ser sobrescrito por:
+     * - env: PARDINI_OUTPUT_DIR
+     * - java prop: -DPARDINI_OUTPUT_DIR=...
+     * - fallback: ./out
+     */
+    private final Path outputDir;
 
     public HpwsClient() {
         AppConfig config = AppConfig.getInstance();
@@ -30,6 +46,11 @@ public class HpwsClient {
         this.connectTimeout = config.getPardiniConnectTimeout();
         this.readTimeout = config.getPardiniReadTimeout();
         this.soapActionGetResultadoPedido = config.getPardiniSoapActionGetResultadoPedido();
+
+        String out = System.getProperty("PARDINI_OUTPUT_DIR");
+        if (out == null || out.isBlank()) out = System.getenv("PARDINI_OUTPUT_DIR");
+        if (out == null || out.isBlank()) out = "out";
+        this.outputDir = Path.of(out);
     }
 
     public HpwsClient(String endpoint, String login, String passwd) {
@@ -40,14 +61,19 @@ public class HpwsClient {
         this.readTimeout = 60000;
         this.soapActionGetResultadoPedido =
                 "http://hermespardini.com.br/b2b/apoio/schemas/HPWS.XMLServer.getResultadoPedido";
+
+        String out = System.getProperty("PARDINI_OUTPUT_DIR");
+        if (out == null || out.isBlank()) out = System.getenv("PARDINI_OUTPUT_DIR");
+        if (out == null || out.isBlank()) out = "out";
+        this.outputDir = Path.of(out);
     }
 
     /**
      * Consulta resultado de pedido no Hermes Pardini.
-     * 
+     *
      * @param anoCodPedApoio Ano do código do pedido
      * @param codPedApoio    Código do pedido (String)
-     * @param incluirPdf     0 = sem PDF, 1 = com PDF
+     * @param incluirPdf     0 = sem PDF, 1 = PDF do pedido, 2 = PDF por exame
      * @return ResultadoPardini com os dados do pedido
      */
     public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, int incluirPdf) {
@@ -56,38 +82,61 @@ public class HpwsClient {
 
     /**
      * Consulta resultado de pedido no Hermes Pardini com código de exame específico.
-     * 
+     *
      * @param anoCodPedApoio Ano do código do pedido
      * @param codPedApoio    Código do pedido (String)
      * @param codExmApoio    Código do exame específico (opcional, pode ser vazio)
-     * @param incluirPdf     0 = sem PDF, 1 = com PDF
+     * @param incluirPdf     0 = sem PDF, 1 = PDF do pedido, 2 = PDF por exame
      * @return ResultadoPardini com os dados do pedido
      */
-    public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, 
-                                                String codExmApoio, int incluirPdf) {
+    public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio,
+                                              String codExmApoio, int incluirPdf) {
         ResultadoPardini resultado = new ResultadoPardini();
         resultado.setAnoCodPedApoio(anoCodPedApoio);
         resultado.setCodPedApoio(codPedApoio);
 
+        long t0 = System.currentTimeMillis();
+        String stamp = LocalDateTime.now().format(TS); // timestamp único desta execução
+
         try {
+            if (endpoint == null || endpoint.isBlank()) {
+                throw new IllegalStateException("pardini.soap.endpoint não configurado");
+            }
+            if (login == null || login.isBlank()) {
+                throw new IllegalStateException("pardini.soap.login não configurado");
+            }
+            if (passwd == null || passwd.isBlank()) {
+                throw new IllegalStateException("pardini.soap.passwd não configurado");
+            }
+
             String soapRequest = buildSoapRequest(anoCodPedApoio, codPedApoio, codExmApoio, incluirPdf);
-            logger.debug("Request SOAP para pedido {}-{}", anoCodPedApoio, codPedApoio);
+
+            // NUNCA logar request completo (tem senha)
+            logger.debug("Request SOAP para pedido {}-{} (PDF={})", anoCodPedApoio, codPedApoio, incluirPdf);
 
             String soapResponse = sendSoapRequest(soapRequest);
             resultado.setXmlOriginal(soapResponse);
 
+            // Salvar XML SEMPRE (mesmo em fault)
+            saveXml(anoCodPedApoio, codPedApoio, stamp, soapResponse);
+
             parseResponse(soapResponse, resultado);
 
             if (resultado.isSucesso()) {
-                logger.info("Pedido {}-{} obtido com sucesso. PDF: {} bytes, Gráfico: {} bytes",
+                logger.info(
+                        "Pedido {}-{} obtido com sucesso. PDFs: {} (total {} bytes) | Gráficos: {} ({}ms)",
                         anoCodPedApoio, codPedApoio,
-                        resultado.getTamanhoPdf(),
-                        resultado.getTamanhoGrafico());
+                        resultado.getTotalPdfs(), resultado.getTamanhoTotalPdfs(),
+                        resultado.getTotalGraficos(),
+                        (System.currentTimeMillis() - t0)
+                );
             }
 
+            // Salvar artefatos se existirem (a partir do ResultadoPardini)
+            saveArtifacts(anoCodPedApoio, codPedApoio, stamp, resultado);
+
         } catch (Exception e) {
-            logger.error("Erro ao consultar pedido {}-{}: {}",
-                    anoCodPedApoio, codPedApoio, e.getMessage(), e);
+            logger.error("Erro ao consultar pedido {}-{}: {}", anoCodPedApoio, codPedApoio, e.getMessage(), e);
             resultado.setSucesso(false);
             resultado.setMensagemErro(e.getMessage());
         }
@@ -95,8 +144,9 @@ public class HpwsClient {
         return resultado;
     }
 
-    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio, 
-                                     String codExmApoio, int incluirPdf) {
+    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio,
+                                    String codExmApoio, int incluirPdf) {
+
         boolean unidadeNoValor = false;
 
         StringBuilder sb = new StringBuilder();
@@ -140,8 +190,10 @@ public class HpwsClient {
             connection.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
             connection.setRequestProperty("SOAPAction", soapActionGetResultadoPedido);
 
+            byte[] requestBytes = soapRequest.getBytes(StandardCharsets.UTF_8);
+            connection.setRequestProperty("Content-Length", String.valueOf(requestBytes.length));
+
             try (OutputStream os = connection.getOutputStream()) {
-                byte[] requestBytes = soapRequest.getBytes(StandardCharsets.UTF_8);
                 os.write(requestBytes);
                 os.flush();
             }
@@ -175,12 +227,12 @@ public class HpwsClient {
 
     private void parseResponse(String xmlResponse, ResultadoPardini resultado) {
         try {
-            // Verificar se é um SOAP Fault
+            // SOAP Fault?
             if (xmlResponse.contains("<SOAP-ENV:Fault>") || xmlResponse.contains("<soap:Fault>")) {
                 String faultString = extractTagContent(xmlResponse, "faultstring");
                 String detail = extractTagContent(xmlResponse, "info");
-                String errorMsg = faultString != null ? faultString : "SOAP Fault";
-                if (detail != null) {
+                String errorMsg = (faultString != null && !faultString.isBlank()) ? faultString : "SOAP Fault";
+                if (detail != null && !detail.isBlank()) {
                     errorMsg += ": " + detail;
                 }
                 resultado.setSucesso(false);
@@ -189,26 +241,37 @@ public class HpwsClient {
                 return;
             }
 
-            String pdfBase64 = extractTagContent(xmlResponse, "PDF");
-            if (pdfBase64 != null && !pdfBase64.isEmpty()) {
-                byte[] pdfBytes = Base64Handler.decode(pdfBase64);
-                if (pdfBytes.length > 0) {
-                    resultado.setPdfBytes(pdfBytes);
-                    resultado.setHashPdf(Base64Handler.calculateSha256(pdfBytes));
+            // PDFs: pode haver múltiplos <PDF> (especialmente quando PDF=2)
+            List<String> pdfTags = extractAllTagContents(xmlResponse, "PDF");
+            int pdfValidos = 0;
+            for (String pdfBase64 : pdfTags) {
+                if (pdfBase64 == null || pdfBase64.isBlank()) continue;
 
-                    if (!Base64Handler.isPdf(pdfBytes)) {
-                        logger.warn("Conteúdo da tag PDF não parece ser um PDF válido");
-                    }
+                byte[] pdfBytes = Base64Handler.decode(pdfBase64);
+                if (pdfBytes == null || pdfBytes.length == 0) continue;
+
+                if (!Base64Handler.isPdf(pdfBytes)) {
+                    logger.warn("Conteúdo de uma tag PDF não parece ser um PDF válido (len={})", pdfBytes.length);
+                    // ainda assim podemos guardar; se preferir descartar, coloque continue aqui.
                 }
+
+                String hash = Base64Handler.calculateSha256(pdfBytes);
+                resultado.addPdf(pdfBytes, hash);
+                pdfValidos++;
             }
 
-            String graficoBase64 = extractTagContent(xmlResponse, "Grafico");
-            if (graficoBase64 != null && !graficoBase64.isEmpty()) {
+            // Gráficos: pode haver múltiplos <Grafico>
+            List<String> grafTags = extractAllTagContents(xmlResponse, "Grafico");
+            int grafValidos = 0;
+            for (String graficoBase64 : grafTags) {
+                if (graficoBase64 == null || graficoBase64.isBlank()) continue;
+
                 byte[] graficoBytes = Base64Handler.decode(graficoBase64);
-                if (graficoBytes.length > 0) {
-                    resultado.setGraficoBytes(graficoBytes);
-                    resultado.setHashGrafico(Base64Handler.calculateSha256(graficoBytes));
-                }
+                if (graficoBytes == null || graficoBytes.length == 0) continue;
+
+                String hashG = Base64Handler.calculateSha256(graficoBytes);
+                resultado.addGrafico(graficoBytes, hashG);
+                grafValidos++;
             }
 
             String codigoRetorno = extractTagContent(xmlResponse, "CodigoRetorno");
@@ -219,8 +282,11 @@ public class HpwsClient {
                 resultado.setMensagemErro(mensagemErro);
             }
 
-            resultado.setSucesso(resultado.temPdf() || resultado.temGrafico() ||
-                    (mensagemErro == null || mensagemErro.isEmpty()));
+            // Se não houve fault e veio algo útil, sucesso
+            boolean sucesso = (pdfValidos > 0) || (grafValidos > 0) ||
+                    (mensagemErro == null || mensagemErro.isEmpty());
+
+            resultado.setSucesso(sucesso);
 
         } catch (Exception e) {
             logger.error("Erro ao parsear resposta SOAP: {}", e.getMessage(), e);
@@ -229,33 +295,50 @@ public class HpwsClient {
         }
     }
 
+    /**
+     * Extrai o conteúdo da primeira ocorrência de uma tag.
+     * Suporta <TAG> e <TAG attr="...">
+     */
     private String extractTagContent(String xml, String tagName) {
+        List<String> all = extractAllTagContents(xml, tagName);
+        return all.isEmpty() ? null : all.get(0);
+    }
+
+    /**
+     * Extrai o conteúdo de TODAS as ocorrências de uma tag, com ou sem atributos.
+     * Ex: <PDF>..</PDF> ou <PDF xsi:type="xsd:string">..</PDF>
+     */
+    private List<String> extractAllTagContents(String xml, String tagName) {
+        List<String> out = new ArrayList<>();
+        if (xml == null || xml.isBlank() || tagName == null || tagName.isBlank()) return out;
+
         String xmlLower = xml.toLowerCase();
         String tagLower = tagName.toLowerCase();
 
-        int startTag = xmlLower.indexOf("<" + tagLower + ">");
-        if (startTag == -1) {
-            startTag = xmlLower.indexOf("<" + tagLower + " ");
+        int from = 0;
+        while (true) {
+            int startTag = xmlLower.indexOf("<" + tagLower + ">", from);
+            int startTagAttr = xmlLower.indexOf("<" + tagLower + " ", from);
+            if (startTag == -1 || (startTagAttr != -1 && startTagAttr < startTag)) {
+                startTag = startTagAttr;
+            }
+            if (startTag == -1) break;
+
+            int contentStart = xml.indexOf(">", startTag);
+            if (contentStart == -1) break;
+            contentStart++;
+
+            int endTag = xmlLower.indexOf("</" + tagLower + ">", contentStart);
+            if (endTag == -1) break;
+
+            out.add(xml.substring(contentStart, endTag).trim());
+            from = endTag + tagLower.length() + 3;
         }
-
-        if (startTag == -1) {
-            return null;
-        }
-
-        int contentStart = xml.indexOf(">", startTag) + 1;
-        int endTag = xmlLower.indexOf("</" + tagLower + ">", contentStart);
-
-        if (endTag == -1) {
-            return null;
-        }
-
-        return xml.substring(contentStart, endTag).trim();
+        return out;
     }
 
     private String escapeXml(String input) {
-        if (input == null) {
-            return "";
-        }
+        if (input == null) return "";
         return input
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
@@ -264,6 +347,9 @@ public class HpwsClient {
                 .replace("'", "&apos;");
     }
 
+    /**
+     * Teste leve: verifica WSDL (HTTP 200).
+     */
     public boolean testarConexao() {
         String wsdlUrl = endpoint.contains("?") ? (endpoint + "&WSDL") : (endpoint + "?WSDL");
 
@@ -281,6 +367,82 @@ public class HpwsClient {
         } catch (Exception e) {
             logger.error("Falha ao testar conexão com Pardini (WSDL): {}", e.getMessage());
             return false;
+        }
+    }
+
+    // ==========================
+    // Salvamento de artefatos
+    // ==========================
+
+    private void ensureOutputDir() {
+        try {
+            Files.createDirectories(outputDir);
+        } catch (Exception e) {
+            logger.warn("Não foi possível criar diretório de saída {}: {}", outputDir, e.getMessage());
+        }
+    }
+
+    private void saveXml(int ano, String pedido, String stamp, String xml) {
+        ensureOutputDir();
+        try {
+            String name = String.format("pardini-%d-%s-%s-response.xml", ano, pedido, stamp);
+            Path p = outputDir.resolve(name);
+            Files.writeString(p, xml, StandardCharsets.UTF_8);
+            logger.info("XML salvo em: {}", p.toAbsolutePath());
+        } catch (Exception e) {
+            logger.warn("Falha ao salvar XML: {}", e.getMessage());
+        }
+    }
+
+    private void saveArtifacts(int ano, String pedido, String stamp, ResultadoPardini resultado) {
+        ensureOutputDir();
+        if (resultado == null) return;
+
+        // PDFs (todos)
+        try {
+            int salvos = 0;
+            List<byte[]> pdfs = resultado.getPdfs();
+            for (int i = 0; i < pdfs.size(); i++) {
+                byte[] bytes = pdfs.get(i);
+                if (bytes == null || bytes.length == 0) continue;
+
+                String name = String.format("pardini-%d-%s-%s-pdf%02d.pdf", ano, pedido, stamp, i);
+                Path p = outputDir.resolve(name);
+                Files.write(p, bytes);
+                salvos++;
+            }
+            if (salvos > 0) {
+                logger.info("PDFs salvos: {} | Pasta: {}", salvos, outputDir.toAbsolutePath());
+            }
+        } catch (Exception e) {
+            logger.warn("Falha ao salvar PDFs: {}", e.getMessage());
+        }
+
+        // Gráficos (todos)
+        try {
+            int salvos = 0;
+            List<byte[]> graficos = resultado.getGraficos();
+            for (int i = 0; i < graficos.size(); i++) {
+                byte[] g = graficos.get(i);
+                if (g == null || g.length == 0) continue;
+
+                String ext = "bin";
+                if (g.length >= 4 && (g[0] & 0xFF) == 0x89 && g[1] == 0x50 && g[2] == 0x4E && g[3] == 0x47) {
+                    ext = "png";
+                } else if (g.length >= 3 && (g[0] & 0xFF) == 0xFF && (g[1] & 0xFF) == 0xD8 && (g[2] & 0xFF) == 0xFF) {
+                    ext = "jpg";
+                }
+
+                String name = String.format("pardini-%d-%s-%s-grafico%02d.%s", ano, pedido, stamp, i, ext);
+                Path p = outputDir.resolve(name);
+                Files.write(p, g);
+                salvos++;
+            }
+            if (salvos > 0) {
+                logger.info("Gráficos salvos: {} | Pasta: {}", salvos, outputDir.toAbsolutePath());
+            }
+        } catch (Exception e) {
+            logger.warn("Falha ao salvar gráficos: {}", e.getMessage());
         }
     }
 }
