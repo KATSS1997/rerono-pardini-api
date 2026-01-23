@@ -111,6 +111,7 @@ public class IntegracaoWorker {
             ResultadoPardini resultado = hpwsClient.getResultadoPedido(
                     pedido.getAnoCodPedApoio(),
                     pedido.getCodPedApoio(),
+                    "",
                     1
             );
 

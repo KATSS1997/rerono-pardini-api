@@ -43,12 +43,16 @@ public class HpwsClient {
     }
 
     public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, int incluirPdf) {
+        return getResultadoPedido(anoCodPedApoio, codPedApoio, "", incluirPdf);
+    }
+
+    public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, String codExmApoio, int incluirPdf) {
         ResultadoPardini resultado = new ResultadoPardini();
         resultado.setAnoCodPedApoio(anoCodPedApoio);
         resultado.setCodPedApoio(codPedApoio);
 
         try {
-            String soapRequest = buildSoapRequest(anoCodPedApoio, codPedApoio, incluirPdf);
+            String soapRequest = buildSoapRequest(anoCodPedApoio, codPedApoio, codExmApoio, incluirPdf);
             logger.debug("Request SOAP para pedido {}-{}", anoCodPedApoio, codPedApoio);
 
             String soapResponse = sendSoapRequest(soapRequest);
@@ -73,7 +77,7 @@ public class HpwsClient {
         return resultado;
     }
 
-    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio, int incluirPdf) {
+    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio, String codExmApoio, int incluirPdf) {
         // OBS: o WSDL que você colou inclui UnidadeNoValor (boolean). Vamos mandar false.
         boolean unidadeNoValor = false;
 
@@ -91,7 +95,9 @@ public class HpwsClient {
         sb.append("      <passwd xsi:type=\"xsd:string\">").append(escapeXml(passwd)).append("</passwd>\n");
         sb.append("      <anoCodPedApoio xsi:type=\"xsd:long\">").append(anoCodPedApoio).append("</anoCodPedApoio>\n");
         sb.append("      <CodPedApoio xsi:type=\"xsd:string\">").append(escapeXml(codPedApoio)).append("</CodPedApoio>\n");
-        sb.append("      <CodExmApoio xsi:type=\"xsd:string\"></CodExmApoio>\n");
+        sb.append("      <CodExmApoio xsi:type=\"xsd:string\">")
+                .append(escapeXml(codExmApoio))
+                .append("</CodExmApoio>\n");
         sb.append("      <PDF xsi:type=\"xsd:long\">").append(incluirPdf).append("</PDF>\n");
         sb.append("      <versaoResultado xsi:type=\"xsd:long\">1</versaoResultado>\n");
         sb.append("      <papelTimbrado xsi:type=\"xsd:boolean\">false</papelTimbrado>\n");
