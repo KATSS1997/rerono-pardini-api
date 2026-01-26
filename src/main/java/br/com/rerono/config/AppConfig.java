@@ -61,6 +61,10 @@ public class AppConfig {
             setIfPresent(dotenv.get("PARDINI_LOGIN"), "pardini.soap.login");
             setIfPresent(dotenv.get("PARDINI_PASSWD"), "pardini.soap.passwd");
 
+            // ✅ Opcional: permitir override de SOAPAction via .env
+            setIfPresent(dotenv.get("PARDINI_SOAP_ACTION_GET_RESULTADO_PEDIDO"), "pardini.soap.action.getResultadoPedido");
+            setIfPresent(dotenv.get("PARDINI_SOAP_ACTION_GET_RESULTADO"), "pardini.soap.action.getResultado");
+
             // Oracle
             setIfPresent(dotenv.get("ORACLE_URL"), "oracle.jdbc.url");
             setIfPresent(dotenv.get("ORACLE_USERNAME"), "oracle.jdbc.username");
@@ -77,6 +81,10 @@ public class AppConfig {
         setIfPresent(System.getenv("PARDINI_ENDPOINT"), "pardini.soap.endpoint");
         setIfPresent(System.getenv("PARDINI_LOGIN"), "pardini.soap.login");
         setIfPresent(System.getenv("PARDINI_PASSWD"), "pardini.soap.passwd");
+
+        // ✅ Opcional: permitir override de SOAPAction via ENV do SO
+        setIfPresent(System.getenv("PARDINI_SOAP_ACTION_GET_RESULTADO_PEDIDO"), "pardini.soap.action.getResultadoPedido");
+        setIfPresent(System.getenv("PARDINI_SOAP_ACTION_GET_RESULTADO"), "pardini.soap.action.getResultado");
 
         // Oracle
         setIfPresent(System.getenv("ORACLE_URL"), "oracle.jdbc.url");
@@ -107,6 +115,14 @@ public class AppConfig {
         return properties.getProperty(
                 "pardini.soap.action.getResultadoPedido",
                 "http://hermespardini.com.br/b2b/apoio/schemas/HPWS.XMLServer.getResultadoPedido"
+        );
+    }
+
+    // ✅ NOVO: usado pelo HpwsClient.getResultado(...)
+    public String getPardiniSoapActionGetResultado() {
+        return properties.getProperty(
+                "pardini.soap.action.getResultado",
+                "http://hermespardini.com.br/b2b/apoio/schemas/HPWS.XMLServer.getResultado"
         );
     }
 

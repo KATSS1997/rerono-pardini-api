@@ -1,0 +1,64 @@
+package br.com.rerono.persistence;
+
+import br.com.rerono.config.DatabaseConfig;
+import br.com.rerono.model.PedidoLabPendente;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
+
+public class ItpedLabRepository {
+
+    private static final Logger logger = LoggerFactory.getLogger(ItpedLabRepository.class);
+
+    private final DatabaseConfig dbConfig;
+
+    public ItpedLabRepository() {
+        this.dbConfig = DatabaseConfig.getInstance();
+    }
+
+    /**
+     * Busca pedidos no MV2000 (ITPED_LAB) com SN_ASSINADO='N'.
+     * Campos mínimos esperados:
+     * - ITPED_LAB.CD_ATENDIMENTO
+     * - ITPED_LAB.CD_PED_LAB
+     * - ITPED_LAB.SN_ASSINADO
+     */
+    public List<PedidoLabPendente> buscarPendentesAssinatura(int limite) throws SQLException {
+
+        String sql = """
+            SELECT
+                i.CD_ATENDIMENTO,
+                i.CD_PED_LAB,
+                i.SN_ASSINADO
+            FROM ITPED_LAB i
+            WHERE i.SN_ASSINADO = 'N'
+              AND i.CD_PED_LAB IS NOT NULL
+            ORDER BY i.CD_ATENDIMENTO DESC
+            FETCH FIRST ? ROWS ONLY
+            """;
+
+        List<PedidoLabPendente> out = new ArrayList<>();
+
+        try (Connection conn = dbConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setInt(1, limite);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Long cdAtendimento = rs.getLong("CD_ATENDIMENTO");
+                    String cdPedLab = rs.getString("CD_PED_LAB");
+                    String snAssinado = rs.getString("SN_ASSINADO");
+
+                    out.add(new PedidoLabPendente(cdAtendimento, cdPedLab, snAssinado));
+                }
+            }
+        }
+
+        logger.info("ITPED_LAB pendentes (SN_ASSINADO='N'): {}", out.size());
+        return out;
+    }
+}

@@ -1,7 +1,6 @@
 package br.com.rerono.model;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 public class ResultadoPardini {
@@ -9,15 +8,10 @@ public class ResultadoPardini {
     private String codPedApoio;
     private Integer anoCodPedApoio;
 
-    // Compatibilidade (primeiro PDF/Gráfico)
-    private byte[] pdfBytes;
-    private byte[] graficoBytes;
-    private String hashPdf;
-    private String hashGrafico;
-
-    // Novo: múltiplos PDFs/Gráficos
+    // múltiplos PDFs/gráficos (PDF=2 pode retornar vários)
     private final List<byte[]> pdfs = new ArrayList<>();
     private final List<String> hashesPdf = new ArrayList<>();
+
     private final List<byte[]> graficos = new ArrayList<>();
     private final List<String> hashesGraficos = new ArrayList<>();
 
@@ -30,201 +24,67 @@ public class ResultadoPardini {
         this.sucesso = false;
     }
 
-    public String getCodPedApoio() {
-        return codPedApoio;
-    }
+    // ======= compatibilidade / campos do pedido =======
 
-    public void setCodPedApoio(String codPedApoio) {
-        this.codPedApoio = codPedApoio;
-    }
+    public String getCodPedApoio() { return codPedApoio; }
+    public void setCodPedApoio(String codPedApoio) { this.codPedApoio = codPedApoio; }
 
-    public Integer getAnoCodPedApoio() {
-        return anoCodPedApoio;
-    }
+    public Integer getAnoCodPedApoio() { return anoCodPedApoio; }
+    public void setAnoCodPedApoio(Integer anoCodPedApoio) { this.anoCodPedApoio = anoCodPedApoio; }
 
-    public void setAnoCodPedApoio(Integer anoCodPedApoio) {
-        this.anoCodPedApoio = anoCodPedApoio;
-    }
+    public String getXmlOriginal() { return xmlOriginal; }
+    public void setXmlOriginal(String xmlOriginal) { this.xmlOriginal = xmlOriginal; }
 
-    /**
-     * Compatibilidade: retorna o PDF “principal” (primeiro PDF válido).
-     */
-    public byte[] getPdfBytes() {
-        if (pdfBytes != null && pdfBytes.length > 0) return pdfBytes;
-        if (!pdfs.isEmpty()) return pdfs.get(0);
-        return null;
-    }
+    public boolean isSucesso() { return sucesso; }
+    public void setSucesso(boolean sucesso) { this.sucesso = sucesso; }
 
-    /**
-     * Compatibilidade: define o PDF principal e também injeta como primeiro PDF na lista (se estiver vazia).
-     */
-    public void setPdfBytes(byte[] pdfBytes) {
-        this.pdfBytes = pdfBytes;
-        if (pdfBytes != null && pdfBytes.length > 0 && pdfs.isEmpty()) {
-            pdfs.add(pdfBytes);
-            // hash pode ser setado depois; não inventamos aqui
-            hashesPdf.add(this.hashPdf);
-        }
-    }
+    public String getMensagemErro() { return mensagemErro; }
+    public void setMensagemErro(String mensagemErro) { this.mensagemErro = mensagemErro; }
 
-    public byte[] getGraficoBytes() {
-        if (graficoBytes != null && graficoBytes.length > 0) return graficoBytes;
-        if (!graficos.isEmpty()) return graficos.get(0);
-        return null;
-    }
+    public String getCodigoRetorno() { return codigoRetorno; }
+    public void setCodigoRetorno(String codigoRetorno) { this.codigoRetorno = codigoRetorno; }
 
-    public void setGraficoBytes(byte[] graficoBytes) {
-        this.graficoBytes = graficoBytes;
-        if (graficoBytes != null && graficoBytes.length > 0 && graficos.isEmpty()) {
-            graficos.add(graficoBytes);
-            hashesGraficos.add(this.hashGrafico);
-        }
-    }
+    // ======= PDFs =======
 
-    public String getHashPdf() {
-        if (hashPdf != null && !hashPdf.isBlank()) return hashPdf;
-        if (!hashesPdf.isEmpty() && hashesPdf.get(0) != null) return hashesPdf.get(0);
-        return null;
-    }
-
-    public void setHashPdf(String hashPdf) {
-        this.hashPdf = hashPdf;
-        if (!hashesPdf.isEmpty()) {
-            hashesPdf.set(0, hashPdf);
-        }
-    }
-
-    public String getHashGrafico() {
-        if (hashGrafico != null && !hashGrafico.isBlank()) return hashGrafico;
-        if (!hashesGraficos.isEmpty() && hashesGraficos.get(0) != null) return hashesGraficos.get(0);
-        return null;
-    }
-
-    public void setHashGrafico(String hashGrafico) {
-        this.hashGrafico = hashGrafico;
-        if (!hashesGraficos.isEmpty()) {
-            hashesGraficos.set(0, hashGrafico);
-        }
-    }
-
-    public String getXmlOriginal() {
-        return xmlOriginal;
-    }
-
-    public void setXmlOriginal(String xmlOriginal) {
-        this.xmlOriginal = xmlOriginal;
-    }
-
-    public boolean isSucesso() {
-        return sucesso;
-    }
-
-    public void setSucesso(boolean sucesso) {
-        this.sucesso = sucesso;
-    }
-
-    public String getMensagemErro() {
-        return mensagemErro;
-    }
-
-    public void setMensagemErro(String mensagemErro) {
-        this.mensagemErro = mensagemErro;
-    }
-
-    public String getCodigoRetorno() {
-        return codigoRetorno;
-    }
-
-    public void setCodigoRetorno(String codigoRetorno) {
-        this.codigoRetorno = codigoRetorno;
-    }
-
-    // =========================
-    // Novo: múltiplos PDFs
-    // =========================
-
-    public void addPdf(byte[] bytes, String sha256) {
+    public void addPdf(byte[] bytes, String hash) {
         if (bytes == null || bytes.length == 0) return;
         pdfs.add(bytes);
-        hashesPdf.add(sha256);
-
-        // Preenche compatibilidade se ainda não tiver “principal”
-        if (this.pdfBytes == null || this.pdfBytes.length == 0) {
-            this.pdfBytes = bytes;
-            this.hashPdf = sha256;
-        }
+        hashesPdf.add(hash);
     }
 
-    public List<byte[]> getPdfs() {
-        return Collections.unmodifiableList(pdfs);
-    }
+    public List<byte[]> getPdfs() { return pdfs; }
 
-    public List<String> getHashesPdf() {
-        return Collections.unmodifiableList(hashesPdf);
-    }
+    public int getTotalPdfs() { return pdfs.size(); }
 
-    public int getTotalPdfs() {
-        return pdfs.size();
-    }
-
-    public int getTamanhoTotalPdfs() {
-        int sum = 0;
-        for (byte[] b : pdfs) sum += (b != null ? b.length : 0);
+    public long getTamanhoTotalPdfs() {
+        long sum = 0;
+        for (byte[] b : pdfs) sum += (b == null ? 0 : b.length);
         return sum;
     }
 
-    // =========================
-    // Novo: múltiplos Gráficos
-    // =========================
+    public boolean temPdf() { return !pdfs.isEmpty(); }
 
-    public void addGrafico(byte[] bytes, String sha256) {
+    // “primeiro PDF” (caso precise compatibilidade em outros pontos)
+    public byte[] getPdfBytes() { return pdfs.isEmpty() ? null : pdfs.get(0); }
+    public String getHashPdf() { return hashesPdf.isEmpty() ? null : hashesPdf.get(0); }
+
+    // ======= Gráficos =======
+
+    public void addGrafico(byte[] bytes, String hash) {
         if (bytes == null || bytes.length == 0) return;
         graficos.add(bytes);
-        hashesGraficos.add(sha256);
-
-        if (this.graficoBytes == null || this.graficoBytes.length == 0) {
-            this.graficoBytes = bytes;
-            this.hashGrafico = sha256;
-        }
+        hashesGraficos.add(hash);
     }
 
-    public List<byte[]> getGraficos() {
-        return Collections.unmodifiableList(graficos);
-    }
+    public List<byte[]> getGraficos() { return graficos; }
 
-    public List<String> getHashesGraficos() {
-        return Collections.unmodifiableList(hashesGraficos);
-    }
+    public int getTotalGraficos() { return graficos.size(); }
 
-    public int getTotalGraficos() {
-        return graficos.size();
-    }
+    public boolean temGrafico() { return !graficos.isEmpty(); }
 
-    public int getTamanhoTotalGraficos() {
-        int sum = 0;
-        for (byte[] b : graficos) sum += (b != null ? b.length : 0);
-        return sum;
-    }
+    public byte[] getGraficoBytes() { return graficos.isEmpty() ? null : graficos.get(0); }
+    public String getHashGrafico() { return hashesGraficos.isEmpty() ? null : hashesGraficos.get(0); }
 
-    // =========================
-    // Helpers atuais (mantidos)
-    // =========================
-
-    public boolean temPdf() {
-        return (getPdfBytes() != null && getPdfBytes().length > 0) || !pdfs.isEmpty();
-    }
-
-    public boolean temGrafico() {
-        return (getGraficoBytes() != null && getGraficoBytes().length > 0) || !graficos.isEmpty();
-    }
-
-    public int getTamanhoPdf() {
-        byte[] b = getPdfBytes();
-        return b != null ? b.length : 0;
-    }
-
-    public int getTamanhoGrafico() {
-        byte[] b = getGraficoBytes();
-        return b != null ? b.length : 0;
-    }
+    public int getTamanhoPdf() { return getPdfBytes() != null ? getPdfBytes().length : 0; }
+    public int getTamanhoGrafico() { return getGraficoBytes() != null ? getGraficoBytes().length : 0; }
 }

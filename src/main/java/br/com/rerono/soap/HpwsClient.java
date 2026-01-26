@@ -176,6 +176,15 @@ public class HpwsClient {
     }
 
     /**
+     * ✅ NOVO: compatibilidade com o IntegracaoWorker (assinatura esperada).
+     * O parâmetro "grafico" entra no XML template (se o Pardini exigir).
+     */
+    public String getResultadoPeriodo(LocalDateTime start, LocalDateTime end, int grafico) {
+        String xml = buildXmlPeriodo(start, end, grafico);
+        return getResultado(xml);
+    }
+
+    /**
      * Conveniência: busca resultados em uma janela (start..end) montando um XML "template".
      * Ajuste o buildXmlPeriodo(...) se o Pardini exigir outro layout.
      */
@@ -198,6 +207,13 @@ public class HpwsClient {
      * Se o Pardini exigir tags/nomes diferentes, ajuste AQUI.
      */
     private String buildXmlPeriodo(LocalDateTime start, LocalDateTime end) {
+        return buildXmlPeriodo(start, end, 0);
+    }
+
+    /**
+     * TEMPLATE do XML do getResultado por período (com "grafico").
+     */
+    private String buildXmlPeriodo(LocalDateTime start, LocalDateTime end, int grafico) {
         String dataInicial = start.format(DT_DATE);
         String dataFinal = end.format(DT_DATE);
         String horaInicial = start.format(DT_TIME);
@@ -211,8 +227,15 @@ public class HpwsClient {
                   <dataFinal>%s</dataFinal>
                   <horaInicial>%s</horaInicial>
                   <horaFinal>%s</horaFinal>
+                  <grafico>%d</grafico>
                 </Parametros>
-                """.formatted(escapeXml(dataInicial), escapeXml(dataFinal), escapeXml(horaInicial), escapeXml(horaFinal));
+                """.formatted(
+                escapeXml(dataInicial),
+                escapeXml(dataFinal),
+                escapeXml(horaInicial),
+                escapeXml(horaFinal),
+                grafico
+        );
     }
 
     // =========================================================
