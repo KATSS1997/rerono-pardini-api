@@ -17,24 +17,42 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * Cliente SOAP "na unha" para Hermes Pardini (HPWS.XMLServer)
+ * - getResultadoPedido -> baixa PDF/Gráfico por pedido
+ * - getResultado      -> baixa XML por período (retorna string XML)
+ *
+ * IMPORTANTE:
+ * O método getResultadoPorPeriodo(...) gera um XML "template" de período.
+ * Se o Pardini exigir outro layout exato, basta ajustar buildXmlPeriodo(...).
+ */
 public class HpwsClient {
 
     private static final Logger logger = LoggerFactory.getLogger(HpwsClient.class);
-    private static final DateTimeFormatter TS = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+
+    // Timestamp p/ salvar arquivos
+    private static final DateTimeFormatter TS_FILE = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+
+    // Sugestão de formato de período (ajuste se o Pardini exigir diferente)
+    private static final DateTimeFormatter DT_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+    private static final DateTimeFormatter DT_TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     private final String endpoint;
     private final String login;
     private final String passwd;
     private final int connectTimeout;
     private final int readTimeout;
+
     private final String soapActionGetResultadoPedido;
+    private final String soapActionGetResultado;
 
     /**
-     * Diretório onde vamos salvar artefatos de teste (XML/PDF/PNG).
+     * Diretório onde vamos salvar artefatos (XML/PDF/PNG).
      * Pode ser sobrescrito por:
-     * - env: PARDINI_OUTPUT_DIR
      * - java prop: -DPARDINI_OUTPUT_DIR=...
-     * - fallback: ./out
+     * - env: PARDINI_OUTPUT_DIR
+     *
+     * Default: C:\projetos\rerono-pardini-api\pdf (como você pediu)
      */
     private final Path outputDir;
 
@@ -45,11 +63,13 @@ public class HpwsClient {
         this.passwd = config.getPardiniPasswd();
         this.connectTimeout = config.getPardiniConnectTimeout();
         this.readTimeout = config.getPardiniReadTimeout();
+
         this.soapActionGetResultadoPedido = config.getPardiniSoapActionGetResultadoPedido();
+        this.soapActionGetResultado = config.getPardiniSoapActionGetResultado(); // <<< ADICIONAR no AppConfig
 
         String out = System.getProperty("PARDINI_OUTPUT_DIR");
         if (out == null || out.isBlank()) out = System.getenv("PARDINI_OUTPUT_DIR");
-        if (out == null || out.isBlank()) out = "out";
+        if (out == null || out.isBlank()) out = "C:\\projetos\\rerono-pardini-api\\pdf";
         this.outputDir = Path.of(out);
     }
 
@@ -59,36 +79,26 @@ public class HpwsClient {
         this.passwd = passwd;
         this.connectTimeout = 30000;
         this.readTimeout = 60000;
+
         this.soapActionGetResultadoPedido =
                 "http://hermespardini.com.br/b2b/apoio/schemas/HPWS.XMLServer.getResultadoPedido";
+        this.soapActionGetResultado =
+                "http://hermespardini.com.br/b2b/apoio/schemas/HPWS.XMLServer.getResultado";
 
         String out = System.getProperty("PARDINI_OUTPUT_DIR");
         if (out == null || out.isBlank()) out = System.getenv("PARDINI_OUTPUT_DIR");
-        if (out == null || out.isBlank()) out = "out";
+        if (out == null || out.isBlank()) out = "C:\\projetos\\rerono-pardini-api\\pdf";
         this.outputDir = Path.of(out);
     }
 
-    /**
-     * Consulta resultado de pedido no Hermes Pardini.
-     *
-     * @param anoCodPedApoio Ano do código do pedido
-     * @param codPedApoio    Código do pedido (String)
-     * @param incluirPdf     0 = sem PDF, 1 = PDF do pedido, 2 = PDF por exame
-     * @return ResultadoPardini com os dados do pedido
-     */
+    // =========================================================
+    // getResultadoPedido (PDF/Gráfico por pedido)
+    // =========================================================
+
     public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio, int incluirPdf) {
         return getResultadoPedido(anoCodPedApoio, codPedApoio, "", incluirPdf);
     }
 
-    /**
-     * Consulta resultado de pedido no Hermes Pardini com código de exame específico.
-     *
-     * @param anoCodPedApoio Ano do código do pedido
-     * @param codPedApoio    Código do pedido (String)
-     * @param codExmApoio    Código do exame específico (opcional, pode ser vazio)
-     * @param incluirPdf     0 = sem PDF, 1 = PDF do pedido, 2 = PDF por exame
-     * @return ResultadoPardini com os dados do pedido
-     */
     public ResultadoPardini getResultadoPedido(int anoCodPedApoio, String codPedApoio,
                                               String codExmApoio, int incluirPdf) {
         ResultadoPardini resultado = new ResultadoPardini();
@@ -96,35 +106,27 @@ public class HpwsClient {
         resultado.setCodPedApoio(codPedApoio);
 
         long t0 = System.currentTimeMillis();
-        String stamp = LocalDateTime.now().format(TS); // timestamp único desta execução
+        String stamp = LocalDateTime.now().format(TS_FILE);
 
         try {
-            if (endpoint == null || endpoint.isBlank()) {
-                throw new IllegalStateException("pardini.soap.endpoint não configurado");
-            }
-            if (login == null || login.isBlank()) {
-                throw new IllegalStateException("pardini.soap.login não configurado");
-            }
-            if (passwd == null || passwd.isBlank()) {
-                throw new IllegalStateException("pardini.soap.passwd não configurado");
-            }
+            validarConfigBasica();
 
-            String soapRequest = buildSoapRequest(anoCodPedApoio, codPedApoio, codExmApoio, incluirPdf);
+            String soapRequest = buildSoapRequestGetResultadoPedido(anoCodPedApoio, codPedApoio, codExmApoio, incluirPdf);
 
             // NUNCA logar request completo (tem senha)
-            logger.debug("Request SOAP para pedido {}-{} (PDF={})", anoCodPedApoio, codPedApoio, incluirPdf);
+            logger.debug("Request SOAP getResultadoPedido {}-{} (PDF={})", anoCodPedApoio, codPedApoio, incluirPdf);
 
-            String soapResponse = sendSoapRequest(soapRequest);
+            String soapResponse = sendSoapRequest(soapRequest, soapActionGetResultadoPedido);
             resultado.setXmlOriginal(soapResponse);
 
-            // Salvar XML SEMPRE (mesmo em fault)
-            saveXml(anoCodPedApoio, codPedApoio, stamp, soapResponse);
+            // Salvar XML sempre (mesmo fault)
+            saveXml("getResultadoPedido", anoCodPedApoio + "-" + codPedApoio, stamp, soapResponse);
 
-            parseResponse(soapResponse, resultado);
+            parseResponseGetResultadoPedido(soapResponse, resultado);
 
             if (resultado.isSucesso()) {
                 logger.info(
-                        "Pedido {}-{} obtido com sucesso. PDFs: {} (total {} bytes) | Gráficos: {} ({}ms)",
+                        "Pedido {}-{} OK. PDFs: {} ({} bytes) | Gráficos: {} ({}ms)",
                         anoCodPedApoio, codPedApoio,
                         resultado.getTotalPdfs(), resultado.getTamanhoTotalPdfs(),
                         resultado.getTotalGraficos(),
@@ -132,11 +134,11 @@ public class HpwsClient {
                 );
             }
 
-            // Salvar artefatos se existirem (a partir do ResultadoPardini)
-            saveArtifacts(anoCodPedApoio, codPedApoio, stamp, resultado);
+            // Salvar arquivos (PDFs/Gráficos)
+            saveArtifactsGetResultadoPedido(anoCodPedApoio, codPedApoio, stamp, resultado);
 
         } catch (Exception e) {
-            logger.error("Erro ao consultar pedido {}-{}: {}", anoCodPedApoio, codPedApoio, e.getMessage(), e);
+            logger.error("Erro getResultadoPedido {}-{}: {}", anoCodPedApoio, codPedApoio, e.getMessage(), e);
             resultado.setSucesso(false);
             resultado.setMensagemErro(e.getMessage());
         }
@@ -144,8 +146,81 @@ public class HpwsClient {
         return resultado;
     }
 
-    private String buildSoapRequest(int anoCodPedApoio, String codPedApoio,
-                                    String codExmApoio, int incluirPdf) {
+    // =========================================================
+    // getResultado (XML por período)
+    // =========================================================
+
+    /**
+     * Chama getResultado passando um XML livre (conforme documentação Pardini).
+     * Retorna a resposta como String (XML).
+     */
+    public String getResultado(String xmlPayload) {
+        String stamp = LocalDateTime.now().format(TS_FILE);
+        try {
+            validarConfigBasica();
+
+            String soapRequest = buildSoapRequestGetResultado(xmlPayload);
+
+            // Não logar payload completo (pode conter dados sensíveis)
+            logger.debug("Request SOAP getResultado (XML payload len={})", xmlPayload != null ? xmlPayload.length() : 0);
+
+            String soapResponse = sendSoapRequest(soapRequest, soapActionGetResultado);
+
+            saveXml("getResultado", "periodo", stamp, soapResponse);
+            return soapResponse;
+
+        } catch (Exception e) {
+            logger.error("Erro getResultado: {}", e.getMessage(), e);
+            return null;
+        }
+    }
+
+    /**
+     * Conveniência: busca resultados em uma janela (start..end) montando um XML "template".
+     * Ajuste o buildXmlPeriodo(...) se o Pardini exigir outro layout.
+     */
+    public String getResultadoPorPeriodo(LocalDateTime start, LocalDateTime end) {
+        String xml = buildXmlPeriodo(start, end);
+        return getResultado(xml);
+    }
+
+    /**
+     * Conveniência: últimos 24h até agora (para rodar 1x por hora).
+     */
+    public String getResultadoUltimas24h() {
+        LocalDateTime end = LocalDateTime.now();
+        LocalDateTime start = end.minusHours(24);
+        return getResultadoPorPeriodo(start, end);
+    }
+
+    /**
+     * TEMPLATE do XML do getResultado por período.
+     * Se o Pardini exigir tags/nomes diferentes, ajuste AQUI.
+     */
+    private String buildXmlPeriodo(LocalDateTime start, LocalDateTime end) {
+        String dataInicial = start.format(DT_DATE);
+        String dataFinal = end.format(DT_DATE);
+        String horaInicial = start.format(DT_TIME);
+        String horaFinal = end.format(DT_TIME);
+
+        // Exemplo comum: enviar período dentro de um XML simples
+        // Troque tags conforme o manual Pardini.
+        return """
+                <Parametros>
+                  <dataInicial>%s</dataInicial>
+                  <dataFinal>%s</dataFinal>
+                  <horaInicial>%s</horaInicial>
+                  <horaFinal>%s</horaFinal>
+                </Parametros>
+                """.formatted(escapeXml(dataInicial), escapeXml(dataFinal), escapeXml(horaInicial), escapeXml(horaFinal));
+    }
+
+    // =========================================================
+    // SOAP builders
+    // =========================================================
+
+    private String buildSoapRequestGetResultadoPedido(int anoCodPedApoio, String codPedApoio,
+                                                      String codExmApoio, int incluirPdf) {
 
         boolean unidadeNoValor = false;
 
@@ -176,7 +251,37 @@ public class HpwsClient {
         return sb.toString();
     }
 
-    private String sendSoapRequest(String soapRequest) throws IOException {
+    private String buildSoapRequestGetResultado(String xmlPayload) {
+        // getResultado: inputs (login, passwd, XML)
+        // Usa estilo RPC/encoded igual ao WSDL.
+        String safeXml = (xmlPayload == null) ? "" : xmlPayload;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");
+        sb.append("<soapenv:Envelope ");
+        sb.append("xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\" ");
+        sb.append("xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" ");
+        sb.append("xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" ");
+        sb.append("xmlns:sch=\"http://hermespardini.com.br/b2b/apoio/schemas\">\n");
+        sb.append("  <soapenv:Header/>\n");
+        sb.append("  <soapenv:Body>\n");
+        sb.append("    <sch:getResultado soapenv:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\">\n");
+        sb.append("      <login xsi:type=\"xsd:string\">").append(escapeXml(login)).append("</login>\n");
+        sb.append("      <passwd xsi:type=\"xsd:string\">").append(escapeXml(passwd)).append("</passwd>\n");
+        // XML costuma vir como string com tags dentro -> melhor colocar em CDATA
+        sb.append("      <XML xsi:type=\"xsd:string\"><![CDATA[").append(safeXml).append("]]></XML>\n");
+        sb.append("    </sch:getResultado>\n");
+        sb.append("  </soapenv:Body>\n");
+        sb.append("</soapenv:Envelope>");
+
+        return sb.toString();
+    }
+
+    // =========================================================
+    // HTTP send
+    // =========================================================
+
+    private String sendSoapRequest(String soapRequest, String soapAction) throws IOException {
         URL url = new URL(endpoint);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
 
@@ -188,7 +293,7 @@ public class HpwsClient {
             connection.setReadTimeout(readTimeout);
 
             connection.setRequestProperty("Content-Type", "text/xml; charset=utf-8");
-            connection.setRequestProperty("SOAPAction", soapActionGetResultadoPedido);
+            connection.setRequestProperty("SOAPAction", soapAction);
 
             byte[] requestBytes = soapRequest.getBytes(StandardCharsets.UTF_8);
             connection.setRequestProperty("Content-Length", String.valueOf(requestBytes.length));
@@ -225,7 +330,11 @@ public class HpwsClient {
         }
     }
 
-    private void parseResponse(String xmlResponse, ResultadoPardini resultado) {
+    // =========================================================
+    // Parse / extract (getResultadoPedido)
+    // =========================================================
+
+    private void parseResponseGetResultadoPedido(String xmlResponse, ResultadoPardini resultado) {
         try {
             // SOAP Fault?
             if (xmlResponse.contains("<SOAP-ENV:Fault>") || xmlResponse.contains("<soap:Fault>")) {
@@ -241,7 +350,7 @@ public class HpwsClient {
                 return;
             }
 
-            // PDFs: pode haver múltiplos <PDF> (especialmente quando PDF=2)
+            // PDFs: pode haver múltiplos <PDF>
             List<String> pdfTags = extractAllTagContents(xmlResponse, "PDF");
             int pdfValidos = 0;
             for (String pdfBase64 : pdfTags) {
@@ -251,8 +360,7 @@ public class HpwsClient {
                 if (pdfBytes == null || pdfBytes.length == 0) continue;
 
                 if (!Base64Handler.isPdf(pdfBytes)) {
-                    logger.warn("Conteúdo de uma tag PDF não parece ser um PDF válido (len={})", pdfBytes.length);
-                    // ainda assim podemos guardar; se preferir descartar, coloque continue aqui.
+                    logger.warn("Conteúdo de uma tag PDF não parece PDF válido (len={})", pdfBytes.length);
                 }
 
                 String hash = Base64Handler.calculateSha256(pdfBytes);
@@ -282,7 +390,6 @@ public class HpwsClient {
                 resultado.setMensagemErro(mensagemErro);
             }
 
-            // Se não houve fault e veio algo útil, sucesso
             boolean sucesso = (pdfValidos > 0) || (grafValidos > 0) ||
                     (mensagemErro == null || mensagemErro.isEmpty());
 
@@ -295,19 +402,11 @@ public class HpwsClient {
         }
     }
 
-    /**
-     * Extrai o conteúdo da primeira ocorrência de uma tag.
-     * Suporta <TAG> e <TAG attr="...">
-     */
     private String extractTagContent(String xml, String tagName) {
         List<String> all = extractAllTagContents(xml, tagName);
         return all.isEmpty() ? null : all.get(0);
     }
 
-    /**
-     * Extrai o conteúdo de TODAS as ocorrências de uma tag, com ou sem atributos.
-     * Ex: <PDF>..</PDF> ou <PDF xsi:type="xsd:string">..</PDF>
-     */
     private List<String> extractAllTagContents(String xml, String tagName) {
         List<String> out = new ArrayList<>();
         if (xml == null || xml.isBlank() || tagName == null || tagName.isBlank()) return out;
@@ -347,9 +446,10 @@ public class HpwsClient {
                 .replace("'", "&apos;");
     }
 
-    /**
-     * Teste leve: verifica WSDL (HTTP 200).
-     */
+    // =========================================================
+    // Teste leve
+    // =========================================================
+
     public boolean testarConexao() {
         String wsdlUrl = endpoint.contains("?") ? (endpoint + "&WSDL") : (endpoint + "?WSDL");
 
@@ -365,14 +465,14 @@ public class HpwsClient {
 
             return code >= 200 && code < 300;
         } catch (Exception e) {
-            logger.error("Falha ao testar conexão com Pardini (WSDL): {}", e.getMessage());
+            logger.error("Falha ao testar conexão Pardini (WSDL): {}", e.getMessage());
             return false;
         }
     }
 
-    // ==========================
+    // =========================================================
     // Salvamento de artefatos
-    // ==========================
+    // =========================================================
 
     private void ensureOutputDir() {
         try {
@@ -382,10 +482,10 @@ public class HpwsClient {
         }
     }
 
-    private void saveXml(int ano, String pedido, String stamp, String xml) {
+    private void saveXml(String operacao, String chave, String stamp, String xml) {
         ensureOutputDir();
         try {
-            String name = String.format("pardini-%d-%s-%s-response.xml", ano, pedido, stamp);
+            String name = String.format("pardini-%s-%s-%s.xml", operacao, chave, stamp);
             Path p = outputDir.resolve(name);
             Files.writeString(p, xml, StandardCharsets.UTF_8);
             logger.info("XML salvo em: {}", p.toAbsolutePath());
@@ -394,7 +494,7 @@ public class HpwsClient {
         }
     }
 
-    private void saveArtifacts(int ano, String pedido, String stamp, ResultadoPardini resultado) {
+    private void saveArtifactsGetResultadoPedido(int ano, String pedido, String stamp, ResultadoPardini resultado) {
         ensureOutputDir();
         if (resultado == null) return;
 
@@ -443,6 +543,28 @@ public class HpwsClient {
             }
         } catch (Exception e) {
             logger.warn("Falha ao salvar gráficos: {}", e.getMessage());
+        }
+    }
+
+    // =========================================================
+    // Helpers
+    // =========================================================
+
+    private void validarConfigBasica() {
+        if (endpoint == null || endpoint.isBlank()) {
+            throw new IllegalStateException("pardini.soap.endpoint não configurado");
+        }
+        if (login == null || login.isBlank()) {
+            throw new IllegalStateException("pardini.soap.login não configurado");
+        }
+        if (passwd == null || passwd.isBlank()) {
+            throw new IllegalStateException("pardini.soap.passwd não configurado");
+        }
+        if (soapActionGetResultadoPedido == null || soapActionGetResultadoPedido.isBlank()) {
+            throw new IllegalStateException("pardini.soap.action.getResultadoPedido não configurado");
+        }
+        if (soapActionGetResultado == null || soapActionGetResultado.isBlank()) {
+            throw new IllegalStateException("pardini.soap.action.getResultado não configurado");
         }
     }
 }
