@@ -210,4 +210,37 @@ public class Mv2000Integrator {
         }
         return null;
     }
+
+    /**
+     * ✅ NOVO
+     * Resolve o CD_ATENDIMENTO a partir do CD_PED_LAB (CodPedLab).
+     * Como você confirmou que "só o CD_PED_LAB já resolve", buscamos direto na ITPED_LAB.
+     */
+    public Long obterAtendimentoPorCdPedLab(String cdPedLab) throws SQLException {
+        if (cdPedLab == null || cdPedLab.trim().isEmpty()) return null;
+
+        String sql = """
+            SELECT CD_ATENDIMENTO
+            FROM ITPED_LAB
+            WHERE CD_PED_LAB = ?
+            ORDER BY CD_ATENDIMENTO DESC
+            FETCH FIRST 1 ROWS ONLY
+            """;
+
+        try (Connection conn = dbConfig.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, cdPedLab.trim());
+
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long v = rs.getLong(1);
+                    if (rs.wasNull()) return null;
+                    return v;
+                }
+            }
+        }
+
+        return null;
+    }
 }

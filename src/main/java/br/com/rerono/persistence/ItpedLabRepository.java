@@ -20,23 +20,22 @@ public class ItpedLabRepository {
     }
 
     /**
-     * Busca pedidos no MV2000 (ITPED_LAB) com SN_ASSINADO='N'.
-     * Campos mínimos esperados:
-     * - ITPED_LAB.CD_ATENDIMENTO
-     * - ITPED_LAB.CD_PED_LAB
-     * - ITPED_LAB.SN_ASSINADO
+     * Busca CD_PED_LAB na ITPED_LAB com SN_ASSINADO='N'
+     * Regras:
+     * - Só precisa do CD_PED_LAB
+     * - Dedup (DISTINCT) para evitar processar repetido
+     * - A data pode ser tratada como SYSDATE do lado da aplicação (LocalDateTime.now()) no getResultado.
      */
     public List<PedidoLabPendente> buscarPendentesAssinatura(int limite) throws SQLException {
 
         String sql = """
-            SELECT
-                i.CD_ATENDIMENTO,
+            SELECT DISTINCT
                 i.CD_PED_LAB,
                 i.SN_ASSINADO
             FROM ITPED_LAB i
             WHERE i.SN_ASSINADO = 'N'
               AND i.CD_PED_LAB IS NOT NULL
-            ORDER BY i.CD_ATENDIMENTO DESC
+            ORDER BY i.CD_PED_LAB
             FETCH FIRST ? ROWS ONLY
             """;
 
@@ -49,11 +48,9 @@ public class ItpedLabRepository {
 
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
-                    Long cdAtendimento = rs.getLong("CD_ATENDIMENTO");
                     String cdPedLab = rs.getString("CD_PED_LAB");
                     String snAssinado = rs.getString("SN_ASSINADO");
-
-                    out.add(new PedidoLabPendente(cdAtendimento, cdPedLab, snAssinado));
+                    out.add(new PedidoLabPendente(cdPedLab, snAssinado));
                 }
             }
         }

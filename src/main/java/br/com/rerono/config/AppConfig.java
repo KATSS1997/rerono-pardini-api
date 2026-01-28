@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.time.Year;
 import java.util.Properties;
 
 public class AppConfig {
@@ -17,23 +18,14 @@ public class AppConfig {
 
     private AppConfig() {
         this.properties = new Properties();
-
-        // 1) Carrega application.properties (defaults)
         loadProperties();
-
-        // 2) Aplica overrides do .env (se existir) e depois do ambiente do SO
-        // Ordem final de prioridade:
-        // ENV do SO > .env > application.properties
         loadDotenvOverrides();
         loadEnvironmentOverrides();
-
         logger.info("Configurações finais carregadas (properties + .env + env do SO)");
     }
 
     public static synchronized AppConfig getInstance() {
-        if (instance == null) {
-            instance = new AppConfig();
-        }
+        if (instance == null) instance = new AppConfig();
         return instance;
     }
 
@@ -52,41 +44,39 @@ public class AppConfig {
 
     private void loadDotenvOverrides() {
         try {
-            Dotenv dotenv = Dotenv.configure()
-                    .ignoreIfMissing()
-                    .load();
+            Dotenv dotenv = Dotenv.configure().ignoreIfMissing().load();
 
-            // Pardini
             setIfPresent(dotenv.get("PARDINI_ENDPOINT"), "pardini.soap.endpoint");
             setIfPresent(dotenv.get("PARDINI_LOGIN"), "pardini.soap.login");
             setIfPresent(dotenv.get("PARDINI_PASSWD"), "pardini.soap.passwd");
 
-            // ✅ Opcional: permitir override de SOAPAction via .env
             setIfPresent(dotenv.get("PARDINI_SOAP_ACTION_GET_RESULTADO_PEDIDO"), "pardini.soap.action.getResultadoPedido");
             setIfPresent(dotenv.get("PARDINI_SOAP_ACTION_GET_RESULTADO"), "pardini.soap.action.getResultado");
 
-            // Oracle
+            // ano/fallback
+            setIfPresent(dotenv.get("PARDINI_ANO_COD_PED_APOIO_DEFAULT"), "pardini.anoCodPedApoio.default");
+            setIfPresent(dotenv.get("PARDINI_ANO_COD_PED_APOIO_FALLBACK_YEARS"), "pardini.anoCodPedApoio.fallbackYears");
+
             setIfPresent(dotenv.get("ORACLE_URL"), "oracle.jdbc.url");
             setIfPresent(dotenv.get("ORACLE_USERNAME"), "oracle.jdbc.username");
             setIfPresent(dotenv.get("ORACLE_PASSWD"), "oracle.jdbc.password");
 
         } catch (Exception e) {
-            // Se der erro, não derruba a aplicação (só loga)
             logger.warn("Falha ao carregar .env: {}", e.getMessage());
         }
     }
 
     private void loadEnvironmentOverrides() {
-        // Pardini
         setIfPresent(System.getenv("PARDINI_ENDPOINT"), "pardini.soap.endpoint");
         setIfPresent(System.getenv("PARDINI_LOGIN"), "pardini.soap.login");
         setIfPresent(System.getenv("PARDINI_PASSWD"), "pardini.soap.passwd");
 
-        // ✅ Opcional: permitir override de SOAPAction via ENV do SO
         setIfPresent(System.getenv("PARDINI_SOAP_ACTION_GET_RESULTADO_PEDIDO"), "pardini.soap.action.getResultadoPedido");
         setIfPresent(System.getenv("PARDINI_SOAP_ACTION_GET_RESULTADO"), "pardini.soap.action.getResultado");
 
-        // Oracle
+        setIfPresent(System.getenv("PARDINI_ANO_COD_PED_APOIO_DEFAULT"), "pardini.anoCodPedApoio.default");
+        setIfPresent(System.getenv("PARDINI_ANO_COD_PED_APOIO_FALLBACK_YEARS"), "pardini.anoCodPedApoio.fallbackYears");
+
         setIfPresent(System.getenv("ORACLE_URL"), "oracle.jdbc.url");
         setIfPresent(System.getenv("ORACLE_USERNAME"), "oracle.jdbc.username");
         setIfPresent(System.getenv("ORACLE_PASSWD"), "oracle.jdbc.password");
@@ -118,7 +108,6 @@ public class AppConfig {
         );
     }
 
-    // ✅ NOVO: usado pelo HpwsClient.getResultado(...)
     public String getPardiniSoapActionGetResultado() {
         return properties.getProperty(
                 "pardini.soap.action.getResultado",
@@ -132,6 +121,24 @@ public class AppConfig {
 
     public int getPardiniReadTimeout() {
         return Integer.parseInt(properties.getProperty("pardini.soap.timeout.read", "60000"));
+    }
+
+    /**
+     * ✅ Como o XSD do getResultado NÃO traz ano, usamos ano padrão configurável.
+     * Default: ano atual.
+     */
+    public int getPardiniAnoCodPedApoioDefault() {
+        String v = properties.getProperty("pardini.anoCodPedApoio.default");
+        if (v == null || v.isBlank()) return Year.now().getValue();
+        try { return Integer.parseInt(v.trim()); }
+        catch (Exception e) { return Year.now().getValue(); }
+    }
+
+    /**
+     * Quantos anos anteriores tentar como fallback (ex.: 1 = tenta ano atual e ano-1).
+     */
+    public int getPardiniAnoCodPedApoioFallbackYears() {
+        return Integer.parseInt(properties.getProperty("pardini.anoCodPedApoio.fallbackYears", "1"));
     }
 
     // ===== ORACLE =====
@@ -202,7 +209,6 @@ public class AppConfig {
         return Integer.parseInt(properties.getProperty("worker.batch.size", "50"));
     }
 
-    // ===== GET GENÉRICO =====
     public String getProperty(String key) {
         return properties.getProperty(key);
     }

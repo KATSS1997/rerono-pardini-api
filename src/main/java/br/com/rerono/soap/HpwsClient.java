@@ -52,7 +52,7 @@ public class HpwsClient {
      * - java prop: -DPARDINI_OUTPUT_DIR=...
      * - env: PARDINI_OUTPUT_DIR
      *
-     * Default: C:\projetos\rerono-pardini-api\pdf (como você pediu)
+     * Default: C:\projetos\rerono-pardini-api\pdf
      */
     private final Path outputDir;
 
@@ -65,7 +65,7 @@ public class HpwsClient {
         this.readTimeout = config.getPardiniReadTimeout();
 
         this.soapActionGetResultadoPedido = config.getPardiniSoapActionGetResultadoPedido();
-        this.soapActionGetResultado = config.getPardiniSoapActionGetResultado(); // <<< ADICIONAR no AppConfig
+        this.soapActionGetResultado = config.getPardiniSoapActionGetResultado();
 
         String out = System.getProperty("PARDINI_OUTPUT_DIR");
         if (out == null || out.isBlank()) out = System.getenv("PARDINI_OUTPUT_DIR");
@@ -176,11 +176,25 @@ public class HpwsClient {
     }
 
     /**
-     * ✅ NOVO: compatibilidade com o IntegracaoWorker (assinatura esperada).
+     * ✅ Compatibilidade com o IntegracaoWorker (assinatura esperada).
      * O parâmetro "grafico" entra no XML template (se o Pardini exigir).
      */
     public String getResultadoPeriodo(LocalDateTime start, LocalDateTime end, int grafico) {
         String xml = buildXmlPeriodo(start, end, grafico);
+
+        // Log seguro só para diagnosticar "root inválida" (sem vazar conteúdo sensível)
+        String root = "desconhecido";
+        if (xml != null) {
+            String t = xml.trim();
+            int lt = t.indexOf('<');
+            int gt = t.indexOf('>');
+            if (lt >= 0 && gt > lt) {
+                String inside = t.substring(lt + 1, gt).trim(); // ex: GetResultado ...attrs
+                root = inside.split("\\s+")[0].replace("/", "");
+            }
+        }
+        logger.info("getResultadoPeriodo: root do payload enviado = {}", root);
+
         return getResultado(xml);
     }
 
@@ -204,14 +218,21 @@ public class HpwsClient {
 
     /**
      * TEMPLATE do XML do getResultado por período.
-     * Se o Pardini exigir tags/nomes diferentes, ajuste AQUI.
      */
     private String buildXmlPeriodo(LocalDateTime start, LocalDateTime end) {
         return buildXmlPeriodo(start, end, 0);
     }
 
     /**
-     * TEMPLATE do XML do getResultado por período (com "grafico").
+     * ✅ AJUSTADO: TEMPLATE do XML do getResultado por período (com "grafico").
+     *
+     * Antes você mandava:
+     *   <Parametros>...</Parametros>
+     * E o Pardini respondeu:
+     *   "Tag root do XML não é válida"
+     *
+     * Então agora enviamos um ROOT "wrapper" e tags padronizadas.
+     * Se ainda assim o Pardini reclamar do root, você troca SOMENTE o nome <GetResultado> pelo root correto.
      */
     private String buildXmlPeriodo(LocalDateTime start, LocalDateTime end, int grafico) {
         String dataInicial = start.format(DT_DATE);
@@ -219,16 +240,16 @@ public class HpwsClient {
         String horaInicial = start.format(DT_TIME);
         String horaFinal = end.format(DT_TIME);
 
-        // Exemplo comum: enviar período dentro de um XML simples
-        // Troque tags conforme o manual Pardini.
         return """
-                <Parametros>
-                  <dataInicial>%s</dataInicial>
-                  <dataFinal>%s</dataFinal>
-                  <horaInicial>%s</horaInicial>
-                  <horaFinal>%s</horaFinal>
-                  <grafico>%d</grafico>
-                </Parametros>
+                <GetResultado>
+                  <Parametros>
+                    <DataInicial>%s</DataInicial>
+                    <DataFinal>%s</DataFinal>
+                    <HoraInicial>%s</HoraInicial>
+                    <HoraFinal>%s</HoraFinal>
+                    <Grafico>%d</Grafico>
+                  </Parametros>
+                </GetResultado>
                 """.formatted(
                 escapeXml(dataInicial),
                 escapeXml(dataFinal),

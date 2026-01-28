@@ -36,8 +36,9 @@ public class IntegracaoWorker {
     private final int tpDocLaudo;
     private final int tpDocGrafico;
 
-    // Janela do getResultado (ex.: 24h)
     private final int janelaHoras;
+    private final int anoDefault;
+    private final int anoFallbackYears;
 
     public IntegracaoWorker() {
         AppConfig config = AppConfig.getInstance();
@@ -50,7 +51,10 @@ public class IntegracaoWorker {
         this.batchSize = config.getWorkerBatchSize();
         this.tpDocLaudo = config.getMv2000TipoDocumentoLaudo();
         this.tpDocGrafico = config.getMv2000TipoDocumentoGrafico();
+
         this.janelaHoras = Integer.parseInt(config.getProperty("pardini.getResultado.window.hours", "24"));
+        this.anoDefault = config.getPardiniAnoCodPedApoioDefault();
+        this.anoFallbackYears = config.getPardiniAnoCodPedApoioFallbackYears();
 
         int poolSize = config.getWorkerThreadPoolSize();
         this.executorService = Executors.newFixedThreadPool(poolSize, r -> {
@@ -59,115 +63,110 @@ public class IntegracaoWorker {
             return t;
         });
 
-        logger.info("Worker inicializado: poolSize={}, batchSize={}, janelaGetResultado={}h",
-                poolSize, batchSize, janelaHoras);
+        logger.info("Worker inicializado: poolSize={}, batchSize={}, janelaGetResultado={}h, anoDefault={}, fallbackYears={}",
+                poolSize, batchSize, janelaHoras, anoDefault, anoFallbackYears);
     }
 
     public int executarCiclo() {
-        logger.info("Iniciando ciclo de processamento (fonte: ITPED_LAB SN_ASSINADO='N')...");
+        logger.info("Iniciando ciclo (ITPED_LAB SN_ASSINADO='N' via CD_PED_LAB + validação getResultado)...");
         processados.set(0);
         erros.set(0);
 
         try {
-            // 1) Atualiza o mapa CodPedLab -> (Ano, CodPedApoio) via getResultado (período)
+            // 1) Atualiza mapa (CodPedLab -> CodPedApoio) via getResultado
             atualizarMapaPardini();
 
-            // 2) Busca no MV2000 ITPED_LAB os pendentes (SN_ASSINADO='N')
+            // 2) Busca CD_PED_LAB pendentes no MV2000
             List<PedidoLabPendente> pendentes = itpedLabRepository.buscarPendentesAssinatura(batchSize);
-
             if (pendentes.isEmpty()) {
-                logger.info("Nenhum ITPED_LAB pendente (SN_ASSINADO='N')");
+                logger.info("Nenhum CD_PED_LAB pendente (SN_ASSINADO='N')");
                 return 0;
             }
 
-            logger.info("Encontrados {} registros ITPED_LAB para avaliar", pendentes.size());
+            logger.info("Encontrados {} CD_PED_LAB pendentes", pendentes.size());
 
             List<Future<Boolean>> futures = new java.util.ArrayList<>();
-
             for (PedidoLabPendente p : pendentes) {
-                Future<Boolean> f = executorService.submit(() -> processarItpedLab(p));
-                futures.add(f);
+                futures.add(executorService.submit(() -> processarCdPedLab(p)));
             }
 
             for (Future<Boolean> f : futures) {
                 try {
-                    f.get(5, TimeUnit.MINUTES);
+                    f.get(10, TimeUnit.MINUTES);
                 } catch (TimeoutException e) {
-                    logger.error("Timeout no processamento de ITPED_LAB");
+                    logger.error("Timeout no processamento");
                     f.cancel(true);
                 } catch (Exception e) {
                     logger.error("Erro ao aguardar processamento: {}", e.getMessage());
                 }
             }
 
-            logger.info("Ciclo concluído: {} processados, {} erros",
-                    processados.get(), erros.get());
-
+            logger.info("Ciclo concluído: {} processados, {} erros", processados.get(), erros.get());
             return processados.get();
 
         } catch (Exception e) {
-            logger.error("Erro no ciclo de processamento: {}", e.getMessage(), e);
+            logger.error("Erro no ciclo: {}", e.getMessage(), e);
             return 0;
         }
     }
 
     private void atualizarMapaPardini() {
         try {
-            LocalDateTime fim = LocalDateTime.now();
+            LocalDateTime fim = LocalDateTime.now();              // SYSDATE equivalente
             LocalDateTime inicio = fim.minusHours(janelaHoras);
 
-            logger.info("Atualizando mapa Pardini via getResultado ({}h): {} -> {}",
-                    janelaHoras, inicio, fim);
+            logger.info("Chamando getResultado ({}h): {} -> {}", janelaHoras, inicio, fim);
 
+            // grafico=0 (não precisamos de gráficos aqui; só do mapa)
             String xml = hpwsClient.getResultadoPeriodo(inicio, fim, 0);
 
             int upserts = mapaRepository.atualizarMapaDeXml(xml);
-
-            logger.info("Mapa Pardini atualizado: {} registros (upsert)", upserts);
+            logger.info("Mapa Pardini atualizado (CodPedLab->CodPedApoio): {} upserts", upserts);
 
         } catch (Exception e) {
-            // não derruba o ciclo inteiro
-            logger.warn("Falha ao atualizar mapa Pardini (getResultado): {}", e.getMessage());
+            logger.warn("Falha ao atualizar mapa Pardini: {}", e.getMessage());
         }
     }
 
-    private boolean processarItpedLab(PedidoLabPendente it) {
+    private boolean processarCdPedLab(PedidoLabPendente it) {
         String cdPedLab = it.getCdPedLab();
-        Long cdAtendimento = it.getCdAtendimento();
 
         try {
             if (isBlank(cdPedLab)) {
-                logger.warn("ITPED_LAB sem CD_PED_LAB (ignorando). Atendimento={}", cdAtendimento);
+                logger.warn("Registro ITPED_LAB sem CD_PED_LAB (ignorando)");
                 return false;
             }
 
-            // 1) Validação “com o XML”: se não mapeou, é porque NÃO apareceu no getResultado
+            // 1) Validar “com o XML”: se não está no mapa, não apareceu no getResultado do período
             MapeamentoPardini mp = mapaRepository.buscarPorCodPedLab(cdPedLab);
-            if (mp == null || isBlank(mp.getCodPedApoio()) || mp.getAnoCodPedApoio() == null) {
-                logger.info("Ainda não apareceu no getResultado: CD_PED_LAB={} (vai tentar no próximo ciclo)", cdPedLab);
+            if (mp == null || isBlank(mp.getCodPedApoio())) {
+                logger.info("Não apareceu no getResultado (ainda): CD_PED_LAB={} (vai tentar no próximo ciclo)", cdPedLab);
                 return false;
             }
 
-            // 2) Segurança: valida atendimento
+            String codPedApoio = mp.getCodPedApoio();
+
+            // 2) Descobrir atendimento/paciente a partir do CD_PED_LAB (MV2000)
+            Long cdAtendimento = mv2000Integrator.obterAtendimentoPorCdPedLab(cdPedLab);
+            if (cdAtendimento == null) {
+                throw new Exception("Não foi possível encontrar CD_ATENDIMENTO para CD_PED_LAB=" + cdPedLab);
+            }
+
             if (!mv2000Integrator.atendimentoExiste(cdAtendimento)) {
                 throw new Exception("Atendimento " + cdAtendimento + " não existe no MV2000");
             }
 
             Long cdPaciente = mv2000Integrator.obterPacienteDoAtendimento(cdAtendimento);
 
-            // 3) Baixa PDF/Gráfico por getResultadoPedido
-            ResultadoPardini resultado = hpwsClient.getResultadoPedido(
-                    mp.getAnoCodPedApoio(),
-                    mp.getCodPedApoio(),
-                    1
-            );
+            // 3) Baixar PDF via getResultadoPedido tentando ano default + fallback
+            ResultadoPardini resultado = baixarResultadoPedidoComFallbackAno(codPedApoio);
+            if (resultado == null) {
+                throw new Exception("Não foi possível baixar PDF para CodPedApoio=" + codPedApoio + " (ano default + fallback falharam)");
+            }
 
             if (!resultado.isSucesso()) {
                 throw new Exception("Pardini retornou erro: " + resultado.getMensagemErro());
             }
-
-            // 4) Anexa no MV2000 (mesma lógica de antes)
-            String chave = mp.getAnoCodPedApoio() + "-" + mp.getCodPedApoio();
 
             Long cdArquivoPdf = null;
             Long cdArquivoGrafico = null;
@@ -176,10 +175,10 @@ public class IntegracaoWorker {
                 String hashPdf = resultado.getHashPdf();
 
                 String descricao = String.format(
-                        "Laudo Hermes Pardini - CD_PED_LAB=%s - Pedido %s [HASH:%s]",
-                        cdPedLab, chave, hashPdf
+                        "Laudo Hermes Pardini - CD_PED_LAB=%s - CodPedApoio=%s [HASH:%s]",
+                        cdPedLab, codPedApoio, hashPdf
                 );
-                String nomeArquivo = String.format("LAUDO_%s_%s.PDF", cdPedLab, chave);
+                String nomeArquivo = String.format("LAUDO_%s_%s.PDF", cdPedLab, codPedApoio);
 
                 cdArquivoPdf = mv2000Integrator.anexarDocumento(
                         resultado.getPdfBytes(),
@@ -199,10 +198,10 @@ public class IntegracaoWorker {
 
                 String tipoImagem = Base64Handler.detectFileType(resultado.getGraficoBytes());
                 String descricao = String.format(
-                        "Gráfico Eletroforese - CD_PED_LAB=%s - Pedido %s [HASH:%s]",
-                        cdPedLab, chave, hashGrafico
+                        "Gráfico Eletroforese - CD_PED_LAB=%s - CodPedApoio=%s [HASH:%s]",
+                        cdPedLab, codPedApoio, hashGrafico
                 );
-                String nomeArquivo = String.format("GRAFICO_%s_%s.%s", cdPedLab, chave, tipoImagem);
+                String nomeArquivo = String.format("GRAFICO_%s_%s.%s", cdPedLab, codPedApoio, tipoImagem);
 
                 cdArquivoGrafico = mv2000Integrator.anexarDocumento(
                         resultado.getGraficoBytes(),
@@ -217,21 +216,40 @@ public class IntegracaoWorker {
                 logger.info("Gráfico anexado: CD_PED_LAB={} -> CD_ARQUIVO_DOCUMENTO={}", cdPedLab, cdArquivoGrafico);
             }
 
-            auditLogger.info("SUCESSO|ITPED_LAB|CD_PED_LAB={}|ATEND={}|PEDIDO={}|PDF={}|GRAFICO={}",
-                    cdPedLab, cdAtendimento, chave, cdArquivoPdf, cdArquivoGrafico);
+            auditLogger.info("SUCESSO|CD_PED_LAB={}|ATEND={}|COD_PED_APOIO={}|PDF={}|GRAFICO={}",
+                    cdPedLab, cdAtendimento, codPedApoio, cdArquivoPdf, cdArquivoGrafico);
 
             processados.incrementAndGet();
             return true;
 
         } catch (Exception e) {
-            logger.error("Erro ao processar ITPED_LAB CD_PED_LAB={}: {}", cdPedLab, e.getMessage(), e);
-
-            auditLogger.info("ERRO|ITPED_LAB|CD_PED_LAB={}|ATEND={}|{}",
-                    cdPedLab, cdAtendimento, e.getMessage());
-
+            logger.error("Erro ao processar CD_PED_LAB={}: {}", cdPedLab, e.getMessage(), e);
+            auditLogger.info("ERRO|CD_PED_LAB={}|{}", cdPedLab, e.getMessage());
             erros.incrementAndGet();
             return false;
         }
+    }
+
+    private ResultadoPardini baixarResultadoPedidoComFallbackAno(String codPedApoio) {
+        for (int i = 0; i <= anoFallbackYears; i++) {
+            int ano = anoDefault - i;
+            try {
+                logger.info("Baixando getResultadoPedido: ano={}, CodPedApoio={}", ano, codPedApoio);
+                ResultadoPardini r = hpwsClient.getResultadoPedido(ano, codPedApoio, 1);
+
+                if (r != null && r.isSucesso() && (r.temPdf() || r.temGrafico())) {
+                    return r;
+                }
+
+                if (r != null && !r.isSucesso()) {
+                    logger.warn("Tentativa ano {} falhou: {}", ano, r.getMensagemErro());
+                }
+
+            } catch (Exception e) {
+                logger.warn("Tentativa ano {} lançou exceção: {}", ano, e.getMessage());
+            }
+        }
+        return null;
     }
 
     private boolean isBlank(String s) {

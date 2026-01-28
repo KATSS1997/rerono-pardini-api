@@ -1,32 +1,47 @@
 package br.com.rerono.persistence;
 
-import br.com.rerono.config.DatabaseConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
-import java.sql.*;
-import java.util.*;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.File;
+import java.io.StringReader;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 
 public class PardiniMapaRepository {
 
-    private static final Logger logger = LoggerFactory.getLogger(PardiniMapaRepository.class);
+    private static final Logger log = LoggerFactory.getLogger(PardiniMapaRepository.class);
 
-    private final DatabaseConfig dbConfig;
+    // tabela fixada no schema DBAMV conforme solicitado
+    private static final String TABELA = "DBAMV.RERONO_PARDINI_MAPA";
 
+    /**
+     * Mantém compatibilidade com o IntegracaoWorker:
+     * - construtor sem parâmetros
+     */
     public PardiniMapaRepository() {
-        this.dbConfig = DatabaseConfig.getInstance();
+        // nada aqui; config vem de env/props
     }
 
+    /**
+     * Tipo interno que o IntegracaoWorker importa:
+     * import br.com.rerono.persistence.PardiniMapaRepository.MapeamentoPardini;
+     */
     public static class MapeamentoPardini {
         private final String codPedLab;
-        private final Integer anoCodPedApoio;
         private final String codPedApoio;
 
-        public MapeamentoPardini(String codPedLab, Integer anoCodPedApoio, String codPedApoio) {
+        public MapeamentoPardini(String codPedLab, String codPedApoio) {
             this.codPedLab = codPedLab;
-            this.anoCodPedApoio = anoCodPedApoio;
             this.codPedApoio = codPedApoio;
         }
 
@@ -34,99 +49,91 @@ public class PardiniMapaRepository {
             return codPedLab;
         }
 
-        public Integer getAnoCodPedApoio() {
-            return anoCodPedApoio;
-        }
-
         public String getCodPedApoio() {
             return codPedApoio;
         }
-
-        @Override
-        public String toString() {
-            return "MapeamentoPardini{" +
-                    "codPedLab='" + codPedLab + '\'' +
-                    ", anoCodPedApoio=" + anoCodPedApoio +
-                    ", codPedApoio='" + codPedApoio + '\'' +
-                    '}';
-        }
     }
 
     /**
-     * Extrai (CodPedLab/CD_PED_LAB) + CodPedApoio (+ AnoCodPedApoio se existir) e faz UPSERT.
+     * Atualiza o mapa CodPedLab -> CodPedApoio a partir do XML salvo pelo HpwsClient
+     * OU a partir do XML em string (quando o worker passa a resposta SOAP inteira).
+     *
+     * Mantém assinatura esperada pelo worker:
+     * atualizarMapaDeXml(String caminhoArquivoXml)
+     *
+     * @return quantidade de upserts realizados
      */
-    public int atualizarMapaDeXml(String xml) throws SQLException {
-        if (xml == null || xml.isBlank()) return 0;
+    public int atualizarMapaDeXml(String caminhoArquivoXml) {
 
-        List<MapeamentoPardini> pares = extrairMapeamentos(xml);
-        if (pares.isEmpty()) {
-            logger.info("Nenhum mapeamento encontrado no XML do getResultado");
+        if (isBlank(caminhoArquivoXml)) {
+            log.warn("atualizarMapaDeXml chamado com valor vazio/nulo");
             return 0;
         }
 
-        String mergeSql = """
-            MERGE INTO RERONO_PARDINI_MAPA t
-            USING (
-                SELECT ? AS COD_PED_LAB, ? AS ANO_COD_PED_APOIO, ? AS COD_PED_APOIO FROM DUAL
-            ) s
-            ON (t.COD_PED_LAB = s.COD_PED_LAB)
-            WHEN MATCHED THEN UPDATE
-                SET t.ANO_COD_PED_APOIO = s.ANO_COD_PED_APOIO,
-                    t.COD_PED_APOIO = s.COD_PED_APOIO,
-                    t.DT_ATUALIZACAO = SYSTIMESTAMP
-            WHEN NOT MATCHED THEN INSERT (COD_PED_LAB, ANO_COD_PED_APOIO, COD_PED_APOIO, DT_ATUALIZACAO)
-                VALUES (s.COD_PED_LAB, s.ANO_COD_PED_APOIO, s.COD_PED_APOIO, SYSTIMESTAMP)
-            """;
+        String trimmed = caminhoArquivoXml.trim();
 
-        int total = 0;
+        // 1) Se veio um XML/SOAP inteiro (fault ou envelope), NÃO é caminho de arquivo.
+        if (trimmed.startsWith("<")) {
 
-        try (Connection conn = dbConfig.getConnection();
-             PreparedStatement ps = conn.prepareStatement(mergeSql)) {
+            // Se for SOAP Fault, só loga e ignora (não tem como extrair Pedido dali)
+            if (trimmed.contains("<SOAP-ENV:Fault") || trimmed.contains("<soap:Fault")
+                    || trimmed.toLowerCase().contains("<faultstring")) {
 
-            for (MapeamentoPardini p : pares) {
-                ps.setString(1, p.getCodPedLab());
-                if (p.getAnoCodPedApoio() != null) ps.setInt(2, p.getAnoCodPedApoio());
-                else ps.setNull(2, Types.NUMERIC);
-                ps.setString(3, p.getCodPedApoio());
-                ps.addBatch();
+                String trecho = trimmed.substring(0, Math.min(300, trimmed.length()));
+                log.warn("SOAP Fault recebido no getResultado. Ignorando atualização do mapa. Trecho={}", trecho);
+                return 0;
             }
 
-            int[] results = ps.executeBatch();
-            for (int r : results) {
-                if (r == Statement.SUCCESS_NO_INFO) total += 1;
-                else if (r > 0) total += r;
+            // Se não for fault, tenta parsear como XML e procurar tags <Pedido> (mesmo dentro do SOAP)
+            try {
+                Document doc = parseXmlFromString(trimmed);
+                return atualizarMapaAPartirDoDocument(doc);
+            } catch (Exception e) {
+                String trecho = trimmed.substring(0, Math.min(300, trimmed.length()));
+                log.error("Não foi possível parsear XML recebido como string (trecho={}).", trecho, e);
+                return 0;
             }
         }
 
-        return total;
+        // 2) Caso normal: é um caminho de arquivo
+        File xml = new File(trimmed);
+        if (!xml.exists() || !xml.isFile()) {
+            log.warn("Arquivo XML não encontrado para atualizar mapa: {}", trimmed);
+            return 0;
+        }
+
+        try {
+            Document doc = parseXmlFromFile(xml);
+            return atualizarMapaAPartirDoDocument(doc);
+        } catch (Exception e) {
+            log.error("Erro ao processar XML do getResultado para atualizar mapa. Arquivo={}", trimmed, e);
+            return 0;
+        }
     }
 
     /**
-     * Busca mapeamento completo por CodPedLab.
+     * Busca o CodPedApoio pelo CodPedLab.
+     * Mantém compatibilidade com o worker.
      */
     public MapeamentoPardini buscarPorCodPedLab(String codPedLab) throws SQLException {
-        if (codPedLab == null || codPedLab.isBlank()) return null;
 
-        String sql = """
-            SELECT COD_PED_LAB, ANO_COD_PED_APOIO, COD_PED_APOIO
-            FROM RERONO_PARDINI_MAPA
-            WHERE COD_PED_LAB = ?
-            ORDER BY DT_ATUALIZACAO DESC
-            FETCH FIRST 1 ROWS ONLY
-            """;
+        String sql =
+                "SELECT COD_PED_LAB, COD_PED_APOIO " +
+                "FROM " + TABELA + " " +
+                "WHERE COD_PED_LAB = ? " +
+                "ORDER BY DT_ATUALIZACAO DESC " +
+                "FETCH FIRST 1 ROWS ONLY";
 
-        try (Connection conn = dbConfig.getConnection();
+        try (Connection conn = abrirConexao();
              PreparedStatement ps = conn.prepareStatement(sql)) {
 
-            ps.setString(1, codPedLab.trim());
+            ps.setString(1, codPedLab);
 
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    String lab = rs.getString("COD_PED_LAB");
-                    int ano = rs.getInt("ANO_COD_PED_APOIO");
-                    Integer anoObj = rs.wasNull() ? null : ano;
+                    String cod = rs.getString("COD_PED_LAB");
                     String apoio = rs.getString("COD_PED_APOIO");
-                    return new MapeamentoPardini(lab, anoObj, apoio);
+                    return new MapeamentoPardini(cod, apoio);
                 }
             }
         }
@@ -134,107 +141,126 @@ public class PardiniMapaRepository {
         return null;
     }
 
-    // =========================================================
-    // Parsing do XML do getResultado (robusto / tolerante)
-    // =========================================================
+    // ======================
+    // Implementação interna
+    // ======================
 
-    private List<MapeamentoPardini> extrairMapeamentos(String xml) {
-        String s = xml;
+    private int atualizarMapaAPartirDoDocument(Document doc) throws SQLException {
+        if (doc == null) return 0;
 
-        // Aceita CodPedLab ou CD_PED_LAB
-        String tagLab1 = "CodPedLab";
-        String tagLab2 = "CD_PED_LAB";
-        String tagApoio = "CodPedApoio";
-        String tagAno = "AnoCodPedApoio";
+        doc.getDocumentElement().normalize();
 
-        List<MapeamentoPardini> out = new ArrayList<>();
+        NodeList pedidos = doc.getElementsByTagName("Pedido");
 
-        // Heurística: pega blocos que tenham CodPedApoio e algum CodPedLab
-        // e tenta também capturar AnoCodPedApoio se estiver no mesmo bloco.
-        Pattern bloco = Pattern.compile(
-                "(<[^>]+>.*?</[^>]+>)",
-                Pattern.CASE_INSENSITIVE | Pattern.DOTALL
-        );
+        int totalPares = 0;
+        int upserts = 0;
 
-        // Melhor: direto por regex multi-tag (ordens possíveis)
-        List<Pattern> patterns = List.of(
-                Pattern.compile(
-                        "<\\s*(?:" + tagLab1 + "|" + tagLab2 + ")\\s*>(.*?)<\\s*/\\s*(?:" + tagLab1 + "|" + tagLab2 + ")\\s*>.*?" +
-                        "<\\s*" + tagApoio + "\\s*>(.*?)<\\s*/\\s*" + tagApoio + "\\s*>.*?" +
-                        "(?:<\\s*" + tagAno + "\\s*>(.*?)<\\s*/\\s*" + tagAno + "\\s*>)?",
-                        Pattern.CASE_INSENSITIVE | Pattern.DOTALL
-                ),
-                Pattern.compile(
-                        "<\\s*" + tagApoio + "\\s*>(.*?)<\\s*/\\s*" + tagApoio + "\\s*>.*?" +
-                        "<\\s*(?:" + tagLab1 + "|" + tagLab2 + ")\\s*>(.*?)<\\s*/\\s*(?:" + tagLab1 + "|" + tagLab2 + ")\\s*>.*?" +
-                        "(?:<\\s*" + tagAno + "\\s*>(.*?)<\\s*/\\s*" + tagAno + "\\s*>)?",
-                        Pattern.CASE_INSENSITIVE | Pattern.DOTALL
-                )
-        );
+        for (int i = 0; i < pedidos.getLength(); i++) {
+            Element pedido = (Element) pedidos.item(i);
 
-        for (Pattern p : patterns) {
-            Matcher m = p.matcher(s);
-            while (m.find()) {
-                // Depende do pattern: normaliza posições
-                String codPedLab;
-                String codPedApoio;
-                String anoStr;
+            String codPedApoio = getText(pedido, "CodPedApoio");
+            String codPedLab = getText(pedido, "CodPedLab");
 
-                if (m.groupCount() >= 2 && m.group(1) != null && m.group(2) != null) {
-                    // pattern 1: lab, apoio, ano?
-                    if (p.pattern().contains("(?:" + tagLab1)) {
-                        codPedLab = limpar(m.group(1));
-                        codPedApoio = limpar(m.group(2));
-                        anoStr = (m.groupCount() >= 3) ? m.group(3) : null;
-                    } else {
-                        codPedLab = limpar(m.group(2));
-                        codPedApoio = limpar(m.group(1));
-                        anoStr = (m.groupCount() >= 3) ? m.group(3) : null;
-                    }
-                } else {
-                    continue;
-                }
-
-                Integer ano = parseIntSafe(limpar(anoStr));
-
-                if (!isBlank(codPedLab) && !isBlank(codPedApoio)) {
-                    out.add(new MapeamentoPardini(codPedLab, ano, codPedApoio));
-                }
+            if (isBlank(codPedLab) || isBlank(codPedApoio)) {
+                continue;
             }
+
+            totalPares++;
+            upsertMapa(codPedLab.trim(), codPedApoio.trim());
+            upserts++;
         }
 
-        // Dedup por codPedLab (mantém o último)
-        Map<String, MapeamentoPardini> dedup = new LinkedHashMap<>();
-        for (MapeamentoPardini mp : out) {
-            dedup.put(mp.getCodPedLab(), mp);
+        log.info("Mapeamentos extraídos do XML (CodPedLab -> CodPedApoio): {}", totalPares);
+        if (totalPares == 0) {
+            log.info("Nenhum par CodPedLab/CodPedApoio encontrado no XML do getResultado");
         }
 
-        List<MapeamentoPardini> finalList = new ArrayList<>(dedup.values());
-        logger.info("Mapeamentos extraídos do XML: {}", finalList.size());
-        return finalList;
+        return upserts;
     }
 
-    private boolean isBlank(String s) {
+    private Document parseXmlFromFile(File xml) throws Exception {
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+
+        DocumentBuilder db = dbf.newDocumentBuilder();
+        return db.parse(xml);
+    }
+
+    private Document parseXmlFromString(String xml) throws Exception {
+        DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
+        dbf.setNamespaceAware(false);
+        dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+
+        DocumentBuilder db = dbf.newDocumentBuilder();
+        InputSource is = new InputSource(new StringReader(xml));
+        return db.parse(is);
+    }
+
+    private void upsertMapa(String codPedLab, String codPedApoio) throws SQLException {
+
+        String sql =
+                "MERGE INTO " + TABELA + " t " +
+                "USING (SELECT ? AS COD_PED_LAB, ? AS COD_PED_APOIO FROM dual) s " +
+                "ON (t.COD_PED_LAB = s.COD_PED_LAB) " +
+                "WHEN MATCHED THEN UPDATE SET " +
+                "  t.COD_PED_APOIO = s.COD_PED_APOIO, " +
+                "  t.DT_ATUALIZACAO = SYSTIMESTAMP " +
+                "WHEN NOT MATCHED THEN INSERT " +
+                "  (COD_PED_LAB, COD_PED_APOIO, DT_ATUALIZACAO) " +
+                "VALUES " +
+                "  (s.COD_PED_LAB, s.COD_PED_APOIO, SYSTIMESTAMP)";
+
+        try (Connection conn = abrirConexao();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, codPedLab);
+            ps.setString(2, codPedApoio);
+
+            ps.executeUpdate();
+        }
+    }
+
+    private Connection abrirConexao() throws SQLException {
+        String url = getCfg("ORACLE_URL", "oracle.url", "DB_URL", "db.url");
+        String user = getCfg("ORACLE_USER", "oracle.user", "DB_USER", "db.user");
+        String pass = getCfg("ORACLE_PASSWORD", "oracle.password", "DB_PASSWORD", "db.password");
+
+        if (isBlank(url) || isBlank(user) || pass == null) {
+            throw new SQLException(
+                    "Config Oracle não encontrada. Defina ORACLE_URL/ORACLE_USER/ORACLE_PASSWORD " +
+                    "(ou oracle.url/oracle.user/oracle.password via -D)."
+            );
+        }
+
+        return DriverManager.getConnection(url, user, pass);
+    }
+
+    private static String getCfg(String envKey, String propKey, String envKey2, String propKey2) {
+        // prioridade: env -> system property -> env alternativo -> system property alternativo
+        String v = System.getenv(envKey);
+        if (!isBlank(v)) return v;
+
+        v = System.getProperty(propKey);
+        if (!isBlank(v)) return v;
+
+        v = System.getenv(envKey2);
+        if (!isBlank(v)) return v;
+
+        v = System.getProperty(propKey2);
+        if (!isBlank(v)) return v;
+
+        return null;
+    }
+
+    private static String getText(Element parent, String tagName) {
+        NodeList list = parent.getElementsByTagName(tagName);
+        if (list == null || list.getLength() == 0) return null;
+        String v = list.item(0).getTextContent();
+        return v != null ? v.trim() : null;
+    }
+
+    private static boolean isBlank(String s) {
         return s == null || s.trim().isEmpty();
-    }
-
-    private String limpar(String v) {
-        if (v == null) return null;
-        String s = v.trim();
-        s = s.replace("&lt;", "<")
-             .replace("&gt;", ">")
-             .replace("&quot;", "\"")
-             .replace("&apos;", "'")
-             .replace("&amp;", "&");
-        return s.trim();
-    }
-
-    private Integer parseIntSafe(String s) {
-        if (s == null || s.isBlank()) return null;
-        try {
-            return Integer.parseInt(s.trim());
-        } catch (Exception ignored) {
-            return null;
-        }
     }
 }
